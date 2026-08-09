@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>100% Local AI Teleprompter</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Mammoth.js for DOCX -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+  <!-- PDF.js for PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+
+  <style>
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    .mirrored { transform: scaleX(-1); }
+  </style>
+</head>
+<body class="bg-gray-950 text-white font-sans h-screen flex flex-col overflow-hidden select-none">
+
+  <!-- Header / Controls -->
+  <header class="bg-gray-900 border-b border-gray-800 p-3 flex justify-between items-center z-50">
+    <div class="flex items-center gap-3">
+      <h1 class="text-base font-bold flex items-center gap-2">
+        <span id="rec-indicator" class="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse hidden"></span>
+        Local Smart Teleprompter
+      </h1>
+      <span id="vad-status" class="text-xs px-2.5 py-0.5 rounded bg-gray-800 text-gray-400 font-mono border border-gray-700">100% Offline Engine</span>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <button id="btn-toggle-panel" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-xs rounded border border-gray-700">Script & Options</button>
+      <button id="btn-start" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded shadow transition">Start Session</button>
+      <button id="btn-stop" class="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded shadow hidden transition">Stop & Save Video</button>
+    </div>
+  </header>
+
+  <div class="flex-1 flex overflow-hidden relative">
+
+    <!-- Left Settings / Input Panel -->
+    <div id="side-panel" class="w-80 bg-gray-900 p-4 border-r border-gray-800 flex flex-col gap-4 z-40 overflow-y-auto">
+      
+      <!-- Script Input -->
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1">Transcript Input</label>
+        <input type="file" id="file-input" accept=".txt,.md,.docx,.pdf" class="block w-full text-[10px] text-gray-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-gray-800 file:text-gray-300 hover:file:bg-gray-700 mb-2 cursor-pointer"/>
+        <textarea id="transcript-input" rows="7" placeholder="Paste your script here..." class="w-full bg-gray-950 border border-gray-800 rounded p-2 text-xs text-gray-200 focus:outline-none focus:border-indigo-500 leading-relaxed font-sans"></textarea>
+      </div>
+
+      <!-- Live Mic Speech Detector (Local Web Audio VAD) -->
+      <div class="bg-gray-950/80 p-3 rounded border border-gray-800 space-y-2">
+        <div class="flex justify-between items-center text-xs">
+          <span class="text-gray-400 font-medium">Local Vocal Energy</span>
+          <span id="vu-text" class="text-[10px] font-mono text-gray-500">0%</span>
+        </div>
+        <div class="w-full bg-gray-800 h-2.5 rounded overflow-hidden">
+          <div id="vu-bar" class="bg-green-500 h-full w-0 transition-all duration-75"></div>
+        </div>
+        <div class="text-[10px] text-gray-500 italic">Prompter scrolls when vocal energy is detected.</div>
+      </div>
+
+      <!-- Reading Speed & Display Settings -->
+      <div class="bg-gray-950/60 p-3 rounded border border-gray-800 space-y-3 text-xs">
+        <div class="font-bold text-gray-300 text-xs uppercase tracking-wider mb-1">Pacing & Display</div>
+        
+        <div>
+          <label class="flex justify-between text-gray-400">Target Speed <span id="val-wpm" class="text-indigo-400 font-bold">140 WPM</span></label>
+          <input type="range" id="opt-wpm" min="60" max="280" step="10" value="140" class="w-full">
+        </div>
+
+        <div>
+          <label class="flex justify-between text-gray-400">Mic Sensitivity <span id="val-sens">Medium</span></label>
+          <input type="range" id="opt-sens" min="5" max="30" step="1" value="15" class="w-full">
+        </div>
+
+        <div>
+          <label class="flex justify-between text-gray-400">Box Opacity <span id="val-opacity">90%</span></label>
+          <input type="range" id="opt-opacity" min="0.2" max="1" step="0.05" value="0.9" class="w-full">
+        </div>
+
+        <div>
+          <label class="flex justify-between text-gray-400">Font Size <span id="val-fontsize">24px</span></label>
+          <input type="range" id="opt-fontsize" min="16" max="36" value="24" class="w-full">
+        </div>
+
+        <div class="flex justify-between items-center pt-1">
+          <label for="opt-mirror" class="text-gray-400">Mirror Display</label>
+          <input type="checkbox" id="opt-mirror" class="rounded bg-gray-800 border-gray-700">
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Main Viewport (Camera + 3-Line Overlay) -->
+    <div class="flex-1 bg-black relative flex justify-center items-center overflow-hidden">
+      
+      <!-- Live Video Feed (1080p Clean Capture) -->
+      <video id="camera-feed" autoplay playsinline muted class="absolute inset-0 w-full h-full object-cover"></video>
+
+      <!-- Centered 3-Line Teleprompter Overlay -->
+      <div id="prompter-box" class="absolute top-10 inset-x-4 max-w-[1200px] mx-auto bg-gray-900/90 border border-gray-700/80 rounded-xl shadow-2xl backdrop-blur-md p-4 transition-all z-30 pointer-events-auto">
+        
+        <!-- 3-Line Viewing Window -->
+        <div id="viewing-window" class="relative h-[135px] overflow-hidden text-center text-white font-medium">
+          
+          <!-- Middle Active Row Cursor Bar -->
+          <div class="absolute top-[45px] left-0 right-0 h-[45px] bg-indigo-500/20 border-y border-indigo-400/40 rounded pointer-events-none z-0"></div>
+
+          <!-- Scrolling Content Inner Container -->
+          <div id="scrolling-content" class="relative z-10 transition-transform duration-200 ease-out pt-[45px]">
+            <div id="lines-container" class="space-y-0">
+              <p class="h-[45px] flex items-center justify-center text-gray-400 italic">Paste transcript & press Start Session...</p>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Real-time Local Status Bar -->
+        <div class="mt-3 pt-2 border-t border-gray-800/80 flex items-center justify-between text-[11px] font-mono">
+          <span class="text-gray-500 uppercase tracking-widest text-[9px]">Local VAD Engine:</span>
+          <span id="speech-hud" class="text-indigo-300 font-semibold">Ready - Waiting to start</span>
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+  <script>
+    let mediaStream = null;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let audioContext = null;
+    let analyser = null;
+    let isPrompting = false;
+    let isUserSpeaking = false;
+    let scrollInterval = null;
+
+    // Transcript State
+    let linesData = [];
+    let allWords = [];
+    let currentWordIndex = 0;
+    let currentLineIndex = 0;
+
+    // DOM Elements
+    const videoElem = document.getElementById('camera-feed');
+    const transcriptInput = document.getElementById('transcript-input');
+    const fileInput = document.getElementById('file-input');
+    const linesContainer = document.getElementById('lines-container');
+    const scrollingContent = document.getElementById('scrolling-content');
+    const prompterBox = document.getElementById('prompter-box');
+    const btnStart = document.getElementById('btn-start');
+    const btnStop = document.getElementById('btn-stop');
+    const vadStatus = document.getElementById('vad-status');
+    const speechHud = document.getElementById('speech-hud');
+    const recIndicator = document.getElementById('rec-indicator');
+    const vuBar = document.getElementById('vu-bar');
+    const vuText = document.getElementById('vu-text');
+
+    // UI Option Controls
+    const optOpacity = document.getElementById('opt-opacity');
+    const optFontsize = document.getElementById('opt-fontsize');
+    const optMirror = document.getElementById('opt-mirror');
+    const optWpm = document.getElementById('opt-wpm');
+    const optSens = document.getElementById('opt-sens');
+
+    // Initialize Camera + Web Audio Analyzer (100% Local)
+    async function initCameraAndAudio() {
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
+          audio: true
+        });
+        videoElem.srcObject = mediaStream;
+
+        // Setup Local Audio Context for VAD
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioContext.createMediaStreamSource(mediaStream);
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        
+        function processLocalAudio() {
+          if (analyser && isPrompting) {
+            analyser.getByteFrequencyData(dataArray);
+            let sum = 0;
+            // Focus on human speech frequencies (~300Hz to ~3000Hz)
+            for (let i = 2; i < 30; i++) {
+              sum += dataArray[i];
+            }
+            let average = sum / 28;
+            let levelPercent = Math.min(100, Math.round((average / 128) * 100));
+
+            vuBar.style.width = levelPercent + '%';
+            vuText.textContent = levelPercent + '%';
+
+            const threshold = parseInt(optSens.value, 10);
+
+            if (levelPercent > threshold) {
+              if (!isUserSpeaking) {
+                isUserSpeaking = true;
+                vadStatus.textContent = "SPEAKING - SCROLLING";
+                vadStatus.className = "text-xs px-2.5 py-0.5 rounded bg-green-950 text-green-400 font-mono border border-green-500/30";
+                speechHud.textContent = "Voice detected -> Advancing transcript...";
+              }
+            } else {
+              if (isUserSpeaking) {
+                isUserSpeaking = false;
+                vadStatus.textContent = "PAUSED / SILENCE";
+                vadStatus.className = "text-xs px-2.5 py-0.5 rounded bg-yellow-950 text-yellow-400 font-mono border border-yellow-500/30";
+                speechHud.textContent = "Silence / Pause detected -> Holding position...";
+              }
+            }
+          }
+          requestAnimationFrame(processLocalAudio);
+        }
+        processLocalAudio();
+
+      } catch (err) {
+        alert("Camera/Microphone access error: " + err.message);
+      }
+    }
+    initCameraAndAudio();
+
+    // Option Adjustments
+    optWpm.addEventListener('input', (e) => {
+      document.getElementById('val-wpm').textContent = `${e.target.value} WPM`;
+      if (isPrompting) restartPacingTimer();
+    });
+
+    optSens.addEventListener('input', (e) => {
+      const val = parseInt(e.target.value, 10);
+      let label = "Medium";
+      if (val < 10) label = "High (Quiet Voice)";
+      else if (val > 20) label = "Low (Loud Mic)";
+      document.getElementById('val-sens').textContent = label;
+    });
+
+    optOpacity.addEventListener('input', (e) => {
+      prompterBox.style.backgroundColor = `rgba(17, 24, 39, ${e.target.value})`;
+      document.getElementById('val-opacity').textContent = `${Math.round(e.target.value * 100)}%`;
+    });
+
+    optFontsize.addEventListener('input', (e) => {
+      linesContainer.style.fontSize = `${e.target.value}px`;
+      document.getElementById('val-fontsize').textContent = `${e.target.value}px`;
+    });
+
+    optMirror.addEventListener('change', (e) => {
+      if (e.target.checked) prompterBox.classList.add('mirrored');
+      else prompterBox.classList.remove('mirrored');
+    });
+
+    // File Upload Handlers
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const fileName = file.name.toLowerCase();
+      if (fileName.endsWith('.txt') || fileName.endsWith('.md')) {
+        transcriptInput.value = await file.text();
+        parseAndRenderTranscript();
+      } else if (fileName.endsWith('.docx')) {
+        const buffer = await file.arrayBuffer();
+        const res = await mammoth.extractRawText({ arrayBuffer: buffer });
+        transcriptInput.value = res.value;
+        parseAndRenderTranscript();
+      } else if (fileName.endsWith('.pdf')) {
+        const buffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+        let text = '';
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const content = await page.getTextContent();
+          text += content.items.map(item => item.str).join(' ') + '\n';
+        }
+        transcriptInput.value = text;
+        parseAndRenderTranscript();
+      }
+    });
+
+    transcriptInput.addEventListener('input', parseAndRenderTranscript);
+
+    // Format Transcript into Lines & Words
+    function parseAndRenderTranscript() {
+      const rawText = transcriptInput.value.trim();
+      if (!rawText) {
+        linesContainer.innerHTML = `<p class="h-[45px] flex items-center justify-center text-gray-400 italic">Paste script & press Start Session...</p>`;
+        linesData = [];
+        allWords = [];
+        return;
+      }
+
+      const rawWords = rawText.split(/\s+/);
+      const WORDS_PER_LINE = 8;
+      
+      linesData = [];
+      allWords = [];
+      let globalWordIdx = 0;
+
+      for (let i = 0; i < rawWords.length; i += WORDS_PER_LINE) {
+        const lineChunk = rawWords.slice(i, i + WORDS_PER_LINE);
+        const lineObj = { lineIdx: linesData.length, words: [] };
+
+        lineChunk.forEach(wordStr => {
+          const wObj = {
+            globalIdx: globalWordIdx,
+            lineIdx: lineObj.lineIdx,
+            original: wordStr
+          };
+          lineObj.words.push(wObj);
+          allWords.push(wObj);
+          globalWordIdx++;
+        });
+
+        linesData.push(lineObj);
+      }
+
+      linesContainer.innerHTML = linesData.map(line => {
+        const wordsHTML = line.words.map(w => 
+          `<span id="w-${w.globalIdx}" class="inline-block mx-1 px-1.5 py-0.5 rounded transition-all duration-150">${w.original}</span>`
+        ).join('');
+
+        return `<div id="line-${line.lineIdx}" class="h-[45px] flex items-center justify-center px-4 whitespace-nowrap text-white/60">${wordsHTML}</div>`;
+      }).join('');
+
+      currentWordIndex = 0;
+      currentLineIndex = 0;
+      updateHighlighting(0);
+    }
+
+    // Highlighting & Scrolling Math
+    function updateHighlighting(wordIndex) {
+      if (!allWords.length) return;
+
+      const oldWord = linesContainer.querySelector('.bg-yellow-400');
+      if (oldWord) oldWord.classList.remove('bg-yellow-400', 'text-black', 'font-bold');
+
+      const oldLine = linesContainer.querySelector('.text-white.font-bold');
+      if (oldLine) {
+        oldLine.classList.remove('text-white', 'font-bold');
+        oldLine.classList.add('text-white/60');
+      }
+
+      const activeWordObj = allWords[wordIndex];
+      if (!activeWordObj) return;
+
+      currentLineIndex = activeWordObj.lineIdx;
+
+      const wordSpan = document.getElementById(`w-${wordIndex}`);
+      if (wordSpan) {
+        wordSpan.classList.add('bg-yellow-400', 'text-black', 'font-bold');
+      }
+
+      const lineDiv = document.getElementById(`line-${currentLineIndex}`);
+      if (lineDiv) {
+        lineDiv.classList.remove('text-white/60');
+        lineDiv.classList.add('text-white', 'font-bold');
+      }
+
+      const LINE_HEIGHT_PX = 45;
+      const translateY = -(currentLineIndex * LINE_HEIGHT_PX);
+      scrollingContent.style.transform = `translateY(${translateY}px)`;
+    }
+
+    // Local Voice-Driven Pacing Loop
+    function restartPacingTimer() {
+      if (scrollInterval) clearInterval(scrollInterval);
+
+      const wpm = parseInt(optWpm.value, 10);
+      const msPerWord = (60 / wpm) * 1000;
+
+      scrollInterval = setInterval(() => {
+        // Advance ONLY if local VAD detects speech
+        if (isPrompting && isUserSpeaking) {
+          if (currentWordIndex < allWords.length - 1) {
+            currentWordIndex++;
+            updateHighlighting(currentWordIndex);
+          } else {
+            clearInterval(scrollInterval);
+            speechHud.textContent = "Transcript completed!";
+          }
+        }
+      }, msPerWord);
+    }
+
+    // Start Session
+    btnStart.addEventListener('click', () => {
+      if (!transcriptInput.value.trim()) {
+        alert("Please paste or upload a transcript first.");
+        return;
+      }
+
+      parseAndRenderTranscript();
+      isPrompting = true;
+      recordedChunks = [];
+
+      if (audioContext && audioContext.state === 'suspended') {
+        audioContext.resume();
+      }
+
+      // Start Clean Video Recording
+      mediaRecorder = new MediaRecorder(mediaStream, { mimeType: 'video/webm;codecs=vp9,opus' });
+      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+      mediaRecorder.start(1000);
+
+      restartPacingTimer();
+
+      btnStart.classList.add('hidden');
+      btnStop.classList.remove('hidden');
+      recIndicator.classList.remove('hidden');
+      updateHighlighting(0);
+      vadStatus.textContent = "LISTENING (100% LOCAL)";
+      vadStatus.className = "text-xs px-2.5 py-0.5 rounded bg-indigo-950 text-indigo-400 font-mono border border-indigo-500/30";
+      speechHud.textContent = "Speak into mic to scroll...";
+    });
+
+    // Stop Session
+    btnStop.addEventListener('click', () => {
+      isPrompting = false;
+      if (scrollInterval) clearInterval(scrollInterval);
+
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(recordedChunks, { type: 'video/webm' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.style.display = 'none';
+          a.href = url;
+          a.download = `Teleprompter-Session-${new Date().toISOString().slice(0,10)}.webm`;
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => {
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+          }, 100);
+        };
+      }
+
+      btnStart.classList.remove('hidden');
+      btnStop.classList.add('hidden');
+      recIndicator.classList.add('hidden');
+      vadStatus.textContent = "SAVED";
+      vadStatus.className = "text-xs px-2.5 py-0.5 rounded bg-green-950 text-green-400 font-mono border border-green-500/30";
+      speechHud.textContent = "Session recording saved to your Mac!";
+    });
+
+    // Keyboard Shortcuts (Arrow keys to step manually)
+    window.addEventListener('keydown', (e) => {
+      if (document.activeElement === transcriptInput) return;
+
+      if (e.code === 'ArrowDown') {
+        currentWordIndex = Math.min(allWords.length - 1, currentWordIndex + 1);
+        updateHighlighting(currentWordIndex);
+      } else if (e.code === 'ArrowUp') {
+        currentWordIndex = Math.max(0, currentWordIndex - 1);
+        updateHighlighting(currentWordIndex);
+      }
+    });
+
+    document.getElementById('btn-toggle-panel').addEventListener('click', () => {
+      document.getElementById('side-panel').classList.toggle('hidden');
+    });
+  </script>
+</body>
+</html>

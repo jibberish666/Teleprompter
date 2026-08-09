@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>100% Local AI Teleprompter</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="bg-gray-950 text-white font-sans h-screen flex flex-col overflow-hidden select-none">
+
+  <header class="bg-gray-900 border-b border-gray-800 p-3 flex justify-between items-center z-50">
+    <div class="flex items-center gap-3">
+      <h1 class="text-base font-bold flex items-center gap-2">
+        <span id="rec-indicator" class="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse hidden"></span>
+        Local Smart Teleprompter
+      </h1>
+      <span id="vad-status" class="text-xs px-2.5 py-0.5 rounded bg-gray-800 text-gray-400 font-mono border border-gray-700">Local Whisper Engine</span>
+      <span id="ws-status" class="text-[10px] px-2 py-0.5 rounded bg-gray-900 text-gray-500 font-mono border border-gray-700">connecting…</span>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <button id="btn-toggle-panel" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-xs rounded border border-gray-700">Script & Options</button>
+      <button id="btn-start" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded shadow transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-indigo-600" disabled>Start Session</button>
+      <button id="btn-stop" class="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded shadow hidden transition">Stop & Save Video</button>
+    </div>
+  </header>
+
+  <div class="flex-1 flex overflow-hidden relative">
+
+    <div id="side-panel" class="w-80 bg-gray-900 p-4 border-r border-gray-800 flex flex-col gap-4 z-40 overflow-y-auto">
+
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1">Transcript Input</label>
+        <input type="file" id="file-input" accept=".txt,.md,.docx,.pdf" class="block w-full text-[10px] text-gray-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-gray-800 file:text-gray-300 hover:file:bg-gray-700 mb-2 cursor-pointer"/>
+        <textarea id="transcript-input" rows="7" placeholder="Paste your script here..." class="w-full bg-gray-950 border border-gray-800 rounded p-2 text-xs text-gray-200 focus:outline-none focus:border-indigo-500 leading-relaxed font-sans"></textarea>
+      </div>
+
+      <div class="bg-gray-950/80 p-3 rounded border border-gray-800 space-y-2">
+        <div class="flex justify-between items-center text-xs">
+          <span class="text-gray-400 font-medium">Local Vocal Energy</span>
+          <span id="vu-text" class="text-[10px] font-mono text-gray-500">0%</span>
+        </div>
+        <div class="w-full bg-gray-800 h-2.5 rounded overflow-hidden">
+          <div id="vu-bar" class="bg-green-500 h-full w-0 transition-all duration-75"></div>
+        </div>
+        <div class="text-[10px] text-gray-500 italic">Visual cue only. Scrolling is driven by local Whisper word sync.</div>
+      </div>
+
+      <div class="bg-gray-950/60 p-3 rounded border border-gray-800 space-y-3 text-xs">
+        <div class="font-bold text-gray-300 text-xs uppercase tracking-wider mb-1">Display</div>
+
+        <div>
+          <label class="flex justify-between text-gray-400">Font Size <span id="val-fontsize" class="text-indigo-400 font-bold">24px</span></label>
+          <input type="range" id="opt-fontsize" min="16" max="36" value="24" class="w-full">
+        </div>
+
+        <div>
+          <label class="flex justify-between text-gray-400">Box Opacity <span id="val-opacity" class="text-indigo-400 font-bold">90%</span></label>
+          <input type="range" id="opt-opacity" min="0.2" max="1" step="0.05" value="0.9" class="w-full">
+        </div>
+
+        <div>
+          <label class="flex justify-between text-gray-400">Mic Sensitivity <span id="val-sens" class="text-indigo-400 font-bold">Medium</span></label>
+          <input type="range" id="opt-sens" min="5" max="30" step="1" value="15" class="w-full">
+        </div>
+
+        <div class="flex justify-between items-center pt-1">
+          <label for="opt-mirror" class="text-gray-400">Mirror Display</label>
+          <input type="checkbox" id="opt-mirror" class="rounded bg-gray-800 border-gray-700">
+        </div>
+      </div>
+
+    </div>
+
+    <div class="flex-1 bg-black relative flex justify-center items-center overflow-hidden">
+
+      <video id="camera-feed" autoplay playsinline muted class="absolute inset-0 w-full h-full object-cover"></video>
+
+      <div id="prompter-box" class="absolute top-10 inset-x-4 max-w-[1200px] mx-auto bg-gray-900/90 border border-gray-700/80 rounded-xl shadow-2xl backdrop-blur-md p-4 transition-all z-30 pointer-events-auto">
+
+        <div id="viewing-window" class="relative h-[135px] overflow-hidden text-center text-white font-medium">
+
+          <div class="absolute top-[45px] left-0 right-0 h-[45px] bg-indigo-500/20 border-y border-indigo-400/40 rounded pointer-events-none z-0"></div>
+
+          <div id="scrolling-content" class="relative z-10 transition-transform duration-200 ease-out pt-[45px]">
+            <div id="lines-container" class="space-y-0">
+              <p class="h-[45px] flex items-center justify-center text-gray-400 italic">Paste transcript & press Start Session...</p>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="mt-3 pt-2 border-t border-gray-800/80 flex items-center justify-between text-[11px] font-mono">
+          <span class="text-gray-500 uppercase tracking-widest text-[9px]">Whisper Sync:</span>
+          <span id="speech-hud" class="text-indigo-300 font-semibold">Waiting for local model…</span>
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
