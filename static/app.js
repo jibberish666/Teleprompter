@@ -44,6 +44,10 @@
   const optFontsize = document.getElementById('opt-fontsize');
   const optSens = document.getElementById('opt-sens');
   const optMirror = document.getElementById('opt-mirror');
+  const optLines = document.getElementById('opt-lines');
+  const valLines = document.getElementById('val-lines');
+  const viewingWindow = document.getElementById('viewing-window');
+  const cursorBar = document.getElementById('cursor-bar');
 
   // ---- WebSocket -----------------------------------------------------------
   function connect() {
@@ -224,7 +228,28 @@
     };
   }
 
-  // ---- Option adjustments (display only) -----------------------------------
+  // ---- Camera controls --------------------------------------------------------
+  document.getElementById('opt-camera-toggle').addEventListener('change', async (e) => {
+    if (e.target.checked) {
+      if (!mediaStream) {
+        await initCameraAndAudio();
+      } else {
+        const tracks = mediaStream.getVideoTracks();
+        tracks.forEach(t => t.enabled = true);
+      }
+      videoElem.classList.remove('hidden');
+    } else {
+      const tracks = mediaStream?.getVideoTracks();
+      tracks?.forEach(t => t.enabled = false);
+      videoElem.classList.add('hidden');
+    }
+  });
+
+  document.getElementById('opt-zoom').addEventListener('input', (e) => {
+    const zoom = parseFloat(e.target.value);
+    document.getElementById('val-zoom').textContent = zoom.toFixed(1) + 'x';
+    videoElem.style.transform = `scale(${zoom})`;
+  });
   optOpacity.addEventListener('input', (e) => {
     prompterBox.style.backgroundColor = `rgba(17, 24, 39, ${e.target.value})`;
     document.getElementById('val-opacity').textContent = `${Math.round(e.target.value * 100)}%`;
@@ -246,6 +271,21 @@
     else if (val > 20) label = 'Low (Loud Mic)';
     document.getElementById('val-sens').textContent = label;
   });
+
+  optLines.addEventListener('input', (e) => {
+    const numLines = parseInt(e.target.value, 10);
+    valLines.textContent = numLines;
+    updateViewportLines(numLines);
+  });
+
+  function updateViewportLines(numLines) {
+    const midLine = Math.floor(numLines / 2);
+    const lineH = 45;
+    viewingWindow.style.height = (numLines * lineH) + 'px';
+    cursorBar.style.top = (midLine * lineH) + 'px';
+    cursorBar.style.height = lineH + 'px';
+    scrollingContent.style.paddingTop = (midLine * lineH) + 'px';
+  }
 
   // ---- File upload ----------------------------------------------------------
   fileInput.addEventListener('change', async (e) => {
@@ -439,5 +479,6 @@
   // ---- Boot ------------------------------------------------------------------
   parseAndRenderTranscript();
   initCameraAndAudio();
+  updateViewportLines(parseInt(optLines.value, 10));
   connect();
 })();

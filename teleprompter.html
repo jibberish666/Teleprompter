@@ -86,6 +86,11 @@
           <input type="range" id="opt-fontsize" min="16" max="36" value="24" class="w-full">
         </div>
 
+        <div>
+          <label class="flex justify-between text-gray-400">Visible Lines <span id="val-lines">3</span></label>
+          <input type="range" id="opt-lines" min="2" max="8" step="1" value="3" class="w-full">
+        </div>
+
         <div class="flex justify-between items-center pt-1">
           <label for="opt-mirror" class="text-gray-400">Mirror Display</label>
           <input type="checkbox" id="opt-mirror" class="rounded bg-gray-800 border-gray-700">
@@ -100,17 +105,17 @@
       <!-- Live Video Feed (1080p Clean Capture) -->
       <video id="camera-feed" autoplay playsinline muted class="absolute inset-0 w-full h-full object-cover"></video>
 
-      <!-- Centered 3-Line Teleprompter Overlay -->
+      <!-- Centered Teleprompter Overlay -->
       <div id="prompter-box" class="absolute top-10 inset-x-4 max-w-[1200px] mx-auto bg-gray-900/90 border border-gray-700/80 rounded-xl shadow-2xl backdrop-blur-md p-4 transition-all z-30 pointer-events-auto">
         
-        <!-- 3-Line Viewing Window -->
-        <div id="viewing-window" class="relative h-[135px] overflow-hidden text-center text-white font-medium">
+        <!-- Viewing Window -->
+        <div id="viewing-window" class="relative overflow-hidden text-center text-white font-medium" style="height:135px">
           
           <!-- Middle Active Row Cursor Bar -->
-          <div class="absolute top-[45px] left-0 right-0 h-[45px] bg-indigo-500/20 border-y border-indigo-400/40 rounded pointer-events-none z-0"></div>
+          <div id="cursor-bar" class="absolute left-0 right-0 bg-indigo-500/20 border-y border-indigo-400/40 rounded pointer-events-none z-0" style="top:45px;height:45px"></div>
 
           <!-- Scrolling Content Inner Container -->
-          <div id="scrolling-content" class="relative z-10 transition-transform duration-200 ease-out pt-[45px]">
+          <div id="scrolling-content" class="relative z-10 transition-transform duration-200 ease-out" style="padding-top:45px">
             <div id="lines-container" class="space-y-0">
               <p class="h-[45px] flex items-center justify-center text-gray-400 italic">Paste transcript & press Start Session...</p>
             </div>
@@ -167,6 +172,10 @@
     const optMirror = document.getElementById('opt-mirror');
     const optWpm = document.getElementById('opt-wpm');
     const optSens = document.getElementById('opt-sens');
+    const optLines = document.getElementById('opt-lines');
+    const valLines = document.getElementById('val-lines');
+    const viewingWindow = document.getElementById('viewing-window');
+    const cursorBar = document.getElementById('cursor-bar');
 
     // Initialize Camera + Web Audio Analyzer (100% Local)
     async function initCameraAndAudio() {
@@ -227,6 +236,7 @@
       }
     }
     initCameraAndAudio();
+    updateViewportLines(parseInt(optLines.value, 10));
 
     // Option Adjustments
     optWpm.addEventListener('input', (e) => {
@@ -251,6 +261,23 @@
       linesContainer.style.fontSize = `${e.target.value}px`;
       document.getElementById('val-fontsize').textContent = `${e.target.value}px`;
     });
+
+    optLines.addEventListener('input', (e) => {
+      const numLines = parseInt(e.target.value, 10);
+      valLines.textContent = numLines;
+      updateViewportLines(numLines);
+    });
+
+    function updateViewportLines(numLines) {
+      const midLine = Math.floor(numLines / 2);
+      const lineH = 45;
+      const windowH = numLines * lineH;
+      const cursorTop = midLine * lineH;
+      viewingWindow.style.height = windowH + 'px';
+      cursorBar.style.top = cursorTop + 'px';
+      cursorBar.style.height = lineH + 'px';
+      scrollingContent.style.paddingTop = cursorTop + 'px';
+    }
 
     optMirror.addEventListener('change', (e) => {
       if (e.target.checked) prompterBox.classList.add('mirrored');

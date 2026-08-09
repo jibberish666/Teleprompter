@@ -66,6 +66,11 @@
         </div>
 
         <div>
+          <label class="flex justify-between text-gray-400">Visible Lines <span id="val-lines" class="text-indigo-400 font-bold">3</span></label>
+          <input type="range" id="opt-lines" min="2" max="8" step="1" value="3" class="w-full">
+        </div>
+
+        <div>
           <label class="flex justify-between text-gray-400">Mic Sensitivity <span id="val-sens" class="text-indigo-400 font-bold">Medium</span></label>
           <input type="range" id="opt-sens" min="5" max="30" step="1" value="15" class="w-full">
         </div>
@@ -73,6 +78,20 @@
         <div class="flex justify-between items-center pt-1">
           <label for="opt-mirror" class="text-gray-400">Mirror Display</label>
           <input type="checkbox" id="opt-mirror" class="rounded bg-gray-800 border-gray-700">
+        </div>
+
+        <div class="border-t border-gray-800 pt-3 mt-1">
+          <div class="font-bold text-gray-300 text-xs uppercase tracking-wider mb-2">Camera</div>
+
+          <div class="flex justify-between items-center mb-2">
+            <label for="opt-camera-toggle" class="text-gray-400">Camera On</label>
+            <input type="checkbox" id="opt-camera-toggle" checked class="rounded bg-gray-800 border-gray-700">
+          </div>
+
+          <div>
+            <label class="flex justify-between text-gray-400">Zoom <span id="val-zoom" class="text-indigo-400 font-bold">1.0x</span></label>
+            <input type="range" id="opt-zoom" min="1" max="3" step="0.1" value="1" class="w-full">
+          </div>
         </div>
       </div>
 
@@ -84,11 +103,11 @@
 
       <div id="prompter-box" class="absolute top-10 inset-x-4 max-w-[1200px] mx-auto bg-gray-900/90 border border-gray-700/80 rounded-xl shadow-2xl backdrop-blur-md p-4 transition-all z-30 pointer-events-auto">
 
-        <div id="viewing-window" class="relative h-[135px] overflow-hidden text-center text-white font-medium">
+        <div id="viewing-window" class="relative overflow-hidden text-center text-white font-medium" style="height:135px">
 
-          <div class="absolute top-[45px] left-0 right-0 h-[45px] bg-indigo-500/20 border-y border-indigo-400/40 rounded pointer-events-none z-0"></div>
+          <div id="cursor-bar" class="absolute top-[45px] left-0 right-0 h-[45px] bg-indigo-500/20 border-y border-indigo-400/40 rounded pointer-events-none z-0"></div>
 
-          <div id="scrolling-content" class="relative z-10 transition-transform duration-200 ease-out pt-[45px]">
+          <div id="scrolling-content" class="relative z-10 transition-transform duration-200 ease-out" style="padding-top:45px">
             <div id="lines-container" class="space-y-0">
               <p class="h-[45px] flex items-center justify-center text-gray-400 italic">Paste transcript & press Start Session...</p>
             </div>
