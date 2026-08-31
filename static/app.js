@@ -2,7 +2,8 @@
   'use strict';
 
   // ---- Global state -------------------------------------------------------
-  let mediaStream = null;
+  let audioStream = null;
+  let videoStream = null;
   let mediaRecorder = null;
   let recordedChunks = [];
   let audioContext = null;
@@ -48,6 +49,60 @@
   const valLines = document.getElementById('val-lines');
   const viewingWindow = document.getElementById('viewing-window');
   const cursorBar = document.getElementById('cursor-bar');
+  const optRecordMode = document.getElementById('opt-record-mode');
+
+  let activeRecordMode = 'video';
+  let activeRecordingOptions = { mimeType: '', extension: 'webm' };
+
+  function getAudioRecorderOptions() {
+    const mimeTypes = [
+      { mime: 'audio/webm;codecs=opus', ext: 'webm' },
+      { mime: 'audio/webm', ext: 'webm' },
+      { mime: 'audio/ogg;codecs=opus', ext: 'ogg' },
+      { mime: 'audio/mp4', ext: 'm4a' },
+      { mime: 'audio/aac', ext: 'm4a' }
+    ];
+    if (window.MediaRecorder && typeof MediaRecorder.isTypeSupported === 'function') {
+      for (const item of mimeTypes) {
+        if (MediaRecorder.isTypeSupported(item.mime)) {
+          return { mimeType: item.mime, extension: item.ext };
+        }
+      }
+    }
+    return { mimeType: '', extension: 'webm' };
+  }
+
+  function getVideoRecorderOptions() {
+    const mimeTypes = [
+      { mime: 'video/webm;codecs=vp9,opus', ext: 'webm' },
+      { mime: 'video/webm;codecs=vp8,opus', ext: 'webm' },
+      { mime: 'video/webm', ext: 'webm' },
+      { mime: 'video/mp4', ext: 'mp4' }
+    ];
+    if (window.MediaRecorder && typeof MediaRecorder.isTypeSupported === 'function') {
+      for (const item of mimeTypes) {
+        if (MediaRecorder.isTypeSupported(item.mime)) {
+          return { mimeType: item.mime, extension: item.ext };
+        }
+      }
+    }
+    return { mimeType: '', extension: 'webm' };
+  }
+
+  function updateStopButtonText() {
+    const mode = optRecordMode ? optRecordMode.value : 'video';
+    if (mode === 'audio') {
+      btnStop.textContent = 'Stop & Save Audio';
+    } else if (mode === 'video') {
+      btnStop.textContent = 'Stop & Save Video';
+    } else {
+      btnStop.textContent = 'Stop Session';
+    }
+  }
+
+  if (optRecordMode) {
+    optRecordMode.addEventListener('change', updateStopButtonText);
+  }
 
   // ---- WebSocket -----------------------------------------------------------
   function connect() {
@@ -147,17 +202,14 @@
     if (!modelReady && wsConnected) btnStart.disabled = true;
   }
 
-  // ---- Camera + local VU analyser ------------------------------------------
-  async function initCameraAndAudio() {
+  // ---- Audio initialization & local VU analyser ----------------------------
+  async function initAudio() {
+    if (audioStream) return;
     try {
-      mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: true,
-      });
-      videoElem.srcObject = mediaStream;
+      audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
       audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      const source = audioContext.createMediaStreamSource(mediaStream);
+      const source = audioContext.createMediaStreamSource(audioStream);
       analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
       source.connect(analyser);
@@ -193,14 +245,49 @@
 
       if (browserAudio && audioContext.state === 'running') startBrowserAudioStream();
     } catch (err) {
-      alert('Camera/Microphone access error: ' + err.message);
+      alert('Microphone access error: ' + err.message);
+    }
+  }
+
+  // ---- Camera controls & stream lifecycle -----------------------------------
+  async function startCamera() {
+    try {
+      stopCamera();
+      videoStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
+      });
+      videoElem.srcObject = videoStream;
+      videoElem.classList.remove('hidden');
+    } catch (err) {
+      alert('Camera access error: ' + err.message);
+    }
+  }
+
+  function stopCamera() {
+    if (videoStream) {
+      videoStream.getTracks().forEach((t) => t.stop());
+      videoStream = null;
+    }
+    if (videoElem.srcObject) {
+      videoElem.srcObject = null;
+    }
+    videoElem.classList.add('hidden');
+  }
+
+  async function initCameraAndAudio() {
+    await initAudio();
+    const cameraToggle = document.getElementById('opt-camera-toggle');
+    if (cameraToggle && cameraToggle.checked) {
+      await startCamera();
+    } else {
+      stopCamera();
     }
   }
 
   // ---- Browser-audio streaming (--browser-audio fallback) ------------------
   function startBrowserAudioStream() {
-    if (captureNode || !audioContext || !mediaStream) return;
-    const source = audioContext.createMediaStreamSource(mediaStream);
+    if (captureNode || !audioContext || !audioStream) return;
+    const source = audioContext.createMediaStreamSource(audioStream);
     captureNode = audioContext.createScriptProcessor(4096, 1, 1);
     const silent = audioContext.createGain();
     silent.gain.value = 0;
@@ -231,17 +318,9 @@
   // ---- Camera controls --------------------------------------------------------
   document.getElementById('opt-camera-toggle').addEventListener('change', async (e) => {
     if (e.target.checked) {
-      if (!mediaStream) {
-        await initCameraAndAudio();
-      } else {
-        const tracks = mediaStream.getVideoTracks();
-        tracks.forEach(t => t.enabled = true);
-      }
-      videoElem.classList.remove('hidden');
+      await startCamera();
     } else {
-      const tracks = mediaStream?.getVideoTracks();
-      tracks?.forEach(t => t.enabled = false);
-      videoElem.classList.add('hidden');
+      stopCamera();
     }
   });
 
@@ -406,23 +485,56 @@
     isPrompting = true;
     recordedChunks = [];
 
+    activeRecordMode = optRecordMode ? optRecordMode.value : 'video';
+    if (optRecordMode) optRecordMode.disabled = true;
+
     if (audioContext && audioContext.state === 'suspended') audioContext.resume();
 
     if (browserAudio && audioContext.state === 'running') startBrowserAudioStream();
 
-    try {
-      mediaRecorder = new MediaRecorder(mediaStream, { mimeType: 'video/webm;codecs=vp9,opus' });
-      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
-      mediaRecorder.start(1000);
-    } catch (_) {
-      speechHud.textContent = 'Recording unavailable – running sync-only.';
+    if (activeRecordMode !== 'off') {
+      try {
+        const tracksToRecord = [];
+        if (activeRecordMode === 'video' && videoStream) {
+          tracksToRecord.push(...videoStream.getVideoTracks().filter((t) => t.readyState === 'live'));
+        }
+        if (audioStream) {
+          tracksToRecord.push(...audioStream.getAudioTracks().filter((t) => t.readyState === 'live'));
+        }
+
+        if (tracksToRecord.length > 0) {
+          const hasVideoTrack = tracksToRecord.some((t) => t.kind === 'video');
+          if (activeRecordMode === 'audio' || !hasVideoTrack) {
+            activeRecordingOptions = getAudioRecorderOptions();
+          } else {
+            activeRecordingOptions = getVideoRecorderOptions();
+          }
+
+          const streamToRecord = new MediaStream(tracksToRecord);
+          const recorderOpts = activeRecordingOptions.mimeType ? { mimeType: activeRecordingOptions.mimeType } : {};
+          mediaRecorder = new MediaRecorder(streamToRecord, recorderOpts);
+          mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
+          mediaRecorder.start(1000);
+          recIndicator.classList.remove('hidden');
+        } else {
+          mediaRecorder = null;
+          recIndicator.classList.add('hidden');
+        }
+      } catch (_) {
+        speechHud.textContent = 'Recording unavailable – running sync-only.';
+        mediaRecorder = null;
+        recIndicator.classList.add('hidden');
+      }
+    } else {
+      mediaRecorder = null;
+      recIndicator.classList.add('hidden');
     }
 
     send({ type: 'start', words: allWords.map((w) => w.original), wpm: 140 });
 
+    updateStopButtonText();
     btnStart.classList.add('hidden');
     btnStop.classList.remove('hidden');
-    recIndicator.classList.remove('hidden');
     updateHighlighting(0);
     updateStartButton();
     setBadge(vadStatus, 'LISTENING (LOCAL WHISPER)', 'bg-indigo-950 text-indigo-400 border-indigo-500/30');
@@ -431,17 +543,20 @@
 
   btnStop.addEventListener('click', () => {
     isPrompting = false;
+    if (optRecordMode) optRecordMode.disabled = false;
 
     send({ type: 'stop' });
 
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    if (activeRecordMode !== 'off' && mediaRecorder && mediaRecorder.state !== 'inactive') {
       mediaRecorder.onstop = () => {
-        const blob = new Blob(recordedChunks, { type: 'video/webm' });
+        const mimeType = activeRecordingOptions.mimeType || (activeRecordMode === 'audio' ? 'audio/webm' : 'video/webm');
+        const blob = new Blob(recordedChunks, { type: mimeType });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.style.display = 'none';
         a.href = url;
-        a.download = `Teleprompter-Session-${new Date().toISOString().slice(0, 10)}.webm`;
+        const prefix = activeRecordMode === 'audio' ? 'Teleprompter-Audio' : 'Teleprompter-Session';
+        a.download = `${prefix}-${new Date().toISOString().slice(0, 10)}.${activeRecordingOptions.extension}`;
         document.body.appendChild(a);
         a.click();
         setTimeout(() => {
@@ -450,14 +565,19 @@
         }, 100);
       };
       mediaRecorder.stop();
+      setBadge(vadStatus, 'SAVED', 'bg-green-950 text-green-400 border-green-500/30');
+      speechHud.textContent = activeRecordMode === 'audio'
+        ? 'Session audio saved to your Mac!'
+        : 'Session recording saved to your Mac!';
+    } else {
+      setBadge(vadStatus, 'STOPPED', 'bg-gray-800 text-gray-400 border-gray-700');
+      speechHud.textContent = 'Session ended.';
     }
 
     btnStart.classList.remove('hidden');
     btnStop.classList.add('hidden');
     recIndicator.classList.add('hidden');
     updateStartButton();
-    setBadge(vadStatus, 'SAVED', 'bg-green-950 text-green-400 border-green-500/30');
-    speechHud.textContent = 'Session recording saved to your Mac!';
   });
 
   // ---- Keyboard manual stepping (local override) ----------------------------
