@@ -410,12 +410,12 @@
   });
 
   function updateViewportLines(numLines) {
-    const midLine = Math.floor(numLines / 2);
+    const activeLineOffset = 1; // Exactly 1 line above the active line (2nd line)
     const lineH = 45;
     viewingWindow.style.height = (numLines * lineH) + 'px';
-    cursorBar.style.top = (midLine * lineH) + 'px';
+    cursorBar.style.top = (activeLineOffset * lineH) + 'px';
     cursorBar.style.height = lineH + 'px';
-    scrollingContent.style.paddingTop = (midLine * lineH) + 'px';
+    scrollingContent.style.paddingTop = (activeLineOffset * lineH) + 'px';
   }
 
   // ---- File upload ----------------------------------------------------------
