@@ -14,28 +14,64 @@ from faster_whisper import WhisperModel
 import aligner
 from audio_capture import RATE
 
+ENGINE_PROFILES = {
+    "ultrafast": {
+        "label": "Ultra Fast",
+        "model_name": "tiny.en",
+        "tick": 0.4,
+        "window": 2.5,
+        "beam_size": 1,
+        "description": "0.4s interval, tiny.en model (lowest latency)",
+    },
+    "fast": {
+        "label": "Fast",
+        "model_name": "base.en",
+        "tick": 0.6,
+        "window": 3.0,
+        "beam_size": 1,
+        "description": "0.6s interval, base.en model (fast + accurate)",
+    },
+    "standard": {
+        "label": "Standard",
+        "model_name": "base.en",
+        "tick": 1.2,
+        "window": 4.0,
+        "beam_size": 5,
+        "description": "1.2s interval, base.en model (original)",
+    },
+}
+
+_MODEL_CACHE = {}
+_MODEL_CACHE_LOCK = threading.Lock()
+
 
 class Transcriber:
     def __init__(
         self,
         audio,
-        model_name="base.en",
+        profile="fast",
+        model_name=None,
         device="cpu",
         compute_type="int8",
-        window=4.0,
-        tick=1.2,
+        window=None,
+        tick=None,
+        beam_size=None,
         align_window=5,
         align_tolerance=3,
         on_sync=None,
         on_status=None,
         on_error=None,
     ):
+        self.profile = profile if profile in ENGINE_PROFILES else "fast"
+        prof = ENGINE_PROFILES[self.profile]
+
         self.audio = audio
-        self.model_name = model_name
+        self.model_name = model_name if model_name is not None else prof["model_name"]
         self.device = device
         self.compute_type = compute_type
-        self.window = window
-        self.tick = tick
+        self.window = float(window if window is not None else prof["window"])
+        self.tick = float(tick if tick is not None else prof["tick"])
+        self.beam_size = int(beam_size if beam_size is not None else prof["beam_size"])
         self.align_window = align_window
         self.align_tolerance = align_tolerance
 
@@ -59,14 +95,22 @@ class Transcriber:
     # -- lifecycle ---------------------------------------------------------
 
     def load(self):
-        """Synchronous load (used by the load thread)."""
-        if self.model is not None:
-            return
-        self.model = WhisperModel(
+        """Synchronous load (used by the load thread) with in-memory caching."""
+        cache_key = (self.model_name, self.device, self.compute_type)
+        with _MODEL_CACHE_LOCK:
+            if cache_key in _MODEL_CACHE:
+                self.model = _MODEL_CACHE[cache_key]
+                return
+
+        model = WhisperModel(
             self.model_name,
             device=self.device,
             compute_type=self.compute_type,
+            cpu_threads=4,
         )
+        with _MODEL_CACHE_LOCK:
+            _MODEL_CACHE[cache_key] = model
+            self.model = model
 
     def start_loading_async(self):
         if self.load_thread and self.load_thread.is_alive():
@@ -81,7 +125,12 @@ class Transcriber:
             self.load()
             self._loading.clear()
             if self.on_status:
-                self.on_status({"model": self.model_name, "ready": True})
+                self.on_status({
+                    "model": self.model_name,
+                    "ready": True,
+                    "profile": self.profile,
+                    "tick": self.tick,
+                })
         except Exception as exc:  # pragma: no cover - surfaced to UI
             self._loading.clear()
             if self.on_error:
@@ -90,6 +139,50 @@ class Transcriber:
     @property
     def is_ready(self):
         return self.model is not None and not self._loading.is_set()
+
+    def set_profile(self, profile_name):
+        """Dynamically switch between speed/model profiles."""
+        if profile_name not in ENGINE_PROFILES:
+            return False
+        prof = ENGINE_PROFILES[profile_name]
+        self.profile = profile_name
+        self.tick = prof["tick"]
+        self.window = prof["window"]
+        self.beam_size = prof["beam_size"]
+
+        target_model = prof["model_name"]
+        if target_model != self.model_name:
+            self.model_name = target_model
+            cache_key = (self.model_name, self.device, self.compute_type)
+            with _MODEL_CACHE_LOCK:
+                cached = _MODEL_CACHE.get(cache_key)
+            if cached is not None:
+                self.model = cached
+                if self.on_status:
+                    self.on_status({
+                        "model": self.model_name,
+                        "ready": True,
+                        "profile": self.profile,
+                        "tick": self.tick,
+                    })
+            else:
+                self.model = None
+                if self.on_status:
+                    self.on_status({
+                        "model": self.model_name,
+                        "ready": False,
+                        "profile": self.profile,
+                    })
+                self.start_loading_async()
+        else:
+            if self.on_status:
+                self.on_status({
+                    "model": self.model_name,
+                    "ready": self.is_ready,
+                    "profile": self.profile,
+                    "tick": self.tick,
+                })
+        return True
 
     def start_loop(self):
         if self.loop_thread and self.loop_thread.is_alive():
@@ -133,6 +226,8 @@ class Transcriber:
         return self.aligner is not None and self.aligner.paused
 
     def _tick(self):
+        if not self.is_ready or self.model is None:
+            return
         audio = self.audio.latest(self.window)
         if len(audio) < int(RATE * 0.5):
             return
@@ -150,6 +245,8 @@ class Transcriber:
 
         segments, _info = self.model.transcribe(
             audio,
+            beam_size=getattr(self, "beam_size", 1),
+            condition_on_previous_text=False,
             vad_filter=True,
             word_timestamps=True,
         )

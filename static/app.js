@@ -50,6 +50,46 @@
   const viewingWindow = document.getElementById('viewing-window');
   const cursorBar = document.getElementById('cursor-bar');
   const optRecordMode = document.getElementById('opt-record-mode');
+  const optEngineSpeed = document.getElementById('opt-engine-speed');
+  const engineBadge = document.getElementById('engine-badge');
+  const engineDesc = document.getElementById('engine-desc');
+
+  const ENGINE_DESCRIPTIONS = {
+    ultrafast: '0.4s interval, tiny.en model (lowest latency, snappiest)',
+    fast: '0.6s interval, base.en model (fast sync + accurate)',
+    standard: '1.2s interval, base.en model (original server default)',
+  };
+
+  const ENGINE_LABELS = {
+    ultrafast: 'Ultra Fast',
+    fast: 'Fast',
+    standard: 'Standard',
+  };
+
+  function updateEngineUI(mode) {
+    if (engineBadge) {
+      engineBadge.textContent = ENGINE_LABELS[mode] || mode;
+    }
+    if (engineDesc) {
+      engineDesc.textContent = ENGINE_DESCRIPTIONS[mode] || '';
+    }
+    if (optEngineSpeed && optEngineSpeed.value !== mode) {
+      optEngineSpeed.value = mode;
+    }
+  }
+
+  if (optEngineSpeed) {
+    const savedEngine = localStorage.getItem('teleprompter_engine_speed') || 'fast';
+    optEngineSpeed.value = savedEngine;
+    updateEngineUI(savedEngine);
+
+    optEngineSpeed.addEventListener('change', (e) => {
+      const mode = e.target.value;
+      localStorage.setItem('teleprompter_engine_speed', mode);
+      updateEngineUI(mode);
+      send({ type: 'set_engine', mode: mode });
+    });
+  }
 
   let activeRecordMode = 'video';
   let activeRecordingOptions = { mimeType: '', extension: 'webm' };
@@ -114,6 +154,10 @@
       wsConnected = true;
       wsStatus.textContent = 'connected';
       wsStatus.className = 'text-[10px] px-2 py-0.5 rounded bg-green-950 text-green-400 font-mono border border-green-500/30';
+      const savedEngine = localStorage.getItem('teleprompter_engine_speed');
+      if (savedEngine) {
+        send({ type: 'set_engine', mode: savedEngine });
+      }
       updateStartButton();
     };
     ws.onclose = () => {
@@ -133,6 +177,10 @@
     switch (msg.type) {
       case 'config':
         browserAudio = !!msg.browser_audio;
+        if (msg.profile) {
+          const saved = localStorage.getItem('teleprompter_engine_speed');
+          if (!saved) updateEngineUI(msg.profile);
+        }
         if (browserAudio && audioContext && audioContext.state === 'running') {
           startBrowserAudioStream();
         }
@@ -153,15 +201,19 @@
   }
 
   function onStatus(msg) {
+    if (msg.profile) {
+      updateEngineUI(msg.profile);
+    }
     if (typeof msg.ready === 'boolean') {
       modelReady = msg.ready;
       if (modelReady) {
-        const src = browserAudio ? 'browser-audio' : (msg.source || 'sounddevice');
-        setBadge(vadStatus, 'OFFLINE ENGINE READY', 'bg-green-950 text-green-400 border-green-500/30');
+        const modelLabel = msg.model ? ` [${msg.model}]` : '';
+        setBadge(vadStatus, `OFFLINE ENGINE READY${modelLabel}`, 'bg-green-950 text-green-400 border-green-500/30');
         speechHud.textContent = 'Local Whisper ready. Paste a script and Start.';
       } else {
-        setBadge(vadStatus, 'LOADING MODEL…', 'bg-indigo-950 text-indigo-400 border-indigo-500/30');
-        speechHud.textContent = 'Downloading local model (first run)…';
+        const modelLabel = msg.model ? ` (${msg.model})` : '';
+        setBadge(vadStatus, `LOADING MODEL${modelLabel}…`, 'bg-indigo-950 text-indigo-400 border-indigo-500/30');
+        speechHud.textContent = `Downloading / initializing local model${modelLabel}…`;
       }
     }
     if (msg.running === false && !isPrompting) {
@@ -404,8 +456,8 @@
 
   // ---- Transcript parsing ----------------------------------------------------
   function parseAndRenderTranscript() {
-    const rawText = transcriptInput.value.trim();
-    if (!rawText) {
+    const rawText = transcriptInput.value;
+    if (!rawText || !rawText.trim()) {
       linesContainer.innerHTML = `<p class="h-[45px] flex items-center justify-center text-gray-400 italic">Paste script & press Start Session...</p>`;
       linesData = [];
       allWords = [];
@@ -414,27 +466,63 @@
       return;
     }
 
-    const rawWords = rawText.split(/\s+/);
     const WORDS_PER_LINE = 8;
     linesData = [];
     allWords = [];
     let globalWordIdx = 0;
 
-    for (let i = 0; i < rawWords.length; i += WORDS_PER_LINE) {
-      const lineChunk = rawWords.slice(i, i + WORDS_PER_LINE);
-      const lineObj = { lineIdx: linesData.length, words: [] };
-      lineChunk.forEach((wordStr) => {
-        const wObj = { globalIdx: globalWordIdx, lineIdx: lineObj.lineIdx, original: wordStr };
-        lineObj.words.push(wObj);
-        allWords.push(wObj);
-        globalWordIdx++;
-      });
-      linesData.push(lineObj);
+    // Split input by newlines to respect carriage returns / paragraph / section breaks
+    const rawLines = rawText.split(/\r\n|\r|\n/);
+    let prevWasBlank = false;
+
+    for (let l = 0; l < rawLines.length; l++) {
+      const trimmedLine = rawLines[l].trim();
+
+      if (!trimmedLine) {
+        // Blank line: represents a paragraph or section break
+        if (!prevWasBlank && linesData.length > 0) {
+          linesData.push({ lineIdx: linesData.length, words: [], isBlank: true });
+          prevWasBlank = true;
+        }
+        continue;
+      }
+
+      prevWasBlank = false;
+      const lineWords = trimmedLine.split(/\s+/).filter(Boolean);
+      if (lineWords.length === 0) continue;
+
+      // Wrap long single lines into chunks of WORDS_PER_LINE
+      for (let i = 0; i < lineWords.length; i += WORDS_PER_LINE) {
+        const lineChunk = lineWords.slice(i, i + WORDS_PER_LINE);
+        const lineObj = { lineIdx: linesData.length, words: [], isBlank: false };
+        lineChunk.forEach((wordStr) => {
+          const wObj = { globalIdx: globalWordIdx, lineIdx: lineObj.lineIdx, original: wordStr };
+          lineObj.words.push(wObj);
+          allWords.push(wObj);
+          globalWordIdx++;
+        });
+        linesData.push(lineObj);
+      }
+    }
+
+    // Remove any trailing blank lines
+    while (linesData.length > 0 && linesData[linesData.length - 1].isBlank) {
+      linesData.pop();
+    }
+
+    if (linesData.length === 0 || allWords.length === 0) {
+      linesContainer.innerHTML = `<p class="h-[45px] flex items-center justify-center text-gray-400 italic">Paste script & press Start Session...</p>`;
+      currentWordIndex = 0;
+      currentLineIndex = 0;
+      return;
     }
 
     linesContainer.innerHTML = linesData.map((line) => {
+      if (line.isBlank) {
+        return `<div id="line-${line.lineIdx}" class="h-[45px] flex items-center justify-center px-4 select-none opacity-40"><span class="inline-block w-8 h-[2px] bg-indigo-400/50 rounded-full"></span></div>`;
+      }
       const wordsHTML = line.words
-        .map((w) => `<span id="w-${w.globalIdx}" class="inline-block mx-1 px-1.5 py-0.5 rounded transition-all duration-150">${w.original}</span>`)
+        .map((w) => `<span id="w-${w.globalIdx}" class="inline-block mx-1 px-1.5 py-0.5 rounded transition-all duration-150 cursor-pointer hover:text-white">${w.original}</span>`)
         .join('');
       return `<div id="line-${line.lineIdx}" class="h-[45px] flex items-center justify-center px-4 whitespace-nowrap text-white/60">${wordsHTML}</div>`;
     }).join('');
@@ -589,6 +677,18 @@
     } else if (e.code === 'ArrowUp' && allWords.length) {
       currentWordIndex = Math.max(0, currentWordIndex - 1);
       updateHighlighting(currentWordIndex);
+    }
+  });
+
+  // ---- Interactive word clicking -------------------------------------------
+  linesContainer.addEventListener('click', (e) => {
+    const wordSpan = e.target.closest('span[id^="w-"]');
+    if (wordSpan) {
+      const idx = parseInt(wordSpan.id.replace('w-', ''), 10);
+      if (!isNaN(idx) && idx >= 0 && idx < allWords.length) {
+        currentWordIndex = idx;
+        updateHighlighting(idx);
+      }
     }
   });
 

@@ -36,6 +36,7 @@ MIME = {
 DEFAULTS = {
     "port": 8000,
     "host": "127.0.0.1",
+    "profile": "fast",
     "model": "base.en",
     "compute_type": "int8",
     "mic": None,
@@ -81,15 +82,16 @@ def build_parser():
         type=int,
         default=int(env("TELEPROMPTER_PORT", cfg.get("port", DEFAULTS["port"]))),
     )
-    parser.add_argument("--model", default=env("TELEPROMPTER_MODEL", DEFAULTS["model"]))
+    parser.add_argument("--profile", default=env("TELEPROMPTER_PROFILE", DEFAULTS["profile"]))
+    parser.add_argument("--model", default=env("TELEPROMPTER_MODEL", None))
     parser.add_argument(
         "--compute-type",
         default=env("TELEPROMPTER_COMPUTE_TYPE", DEFAULTS["compute_type"]),
     )
     parser.add_argument("--device", default=env("TELEPROMPTER_DEVICE", "cpu"))
     parser.add_argument("--mic", default=env("TELEPROMPTER_MIC", DEFAULTS["mic"]))
-    parser.add_argument("--tick", type=float, default=DEFAULTS["tick"])
-    parser.add_argument("--window", type=float, default=DEFAULTS["window"])
+    parser.add_argument("--tick", type=float, default=None)
+    parser.add_argument("--window", type=float, default=None)
     parser.add_argument("--align-window", type=int, default=DEFAULTS["align_window"])
     parser.add_argument("--align-tolerance", type=int, default=DEFAULTS["align_tolerance"])
     parser.add_argument(
@@ -207,13 +209,23 @@ async def main(args):
     def _on_error(message):
         hub.schedule({"type": "error", "message": message})
 
+    # Pick profile defaults or explicit overrides
+    prof_key = args.profile if args.profile in transcriber.ENGINE_PROFILES else "fast"
+    prof = transcriber.ENGINE_PROFILES[prof_key]
+    model_name = args.model if args.model is not None else prof["model_name"]
+    tick = args.tick if args.tick is not None else prof["tick"]
+    window = args.window if args.window is not None else prof["window"]
+    beam_size = prof.get("beam_size", 1)
+
     trans = transcriber.Transcriber(
         audio=capture,
-        model_name=args.model,
+        model_name=model_name,
         device=args.device,
         compute_type=args.compute_type,
-        window=args.window,
-        tick=args.tick,
+        window=window,
+        tick=tick,
+        beam_size=beam_size,
+        profile=prof_key,
         align_window=args.align_window,
         align_tolerance=args.align_tolerance,
         on_sync=_on_sync,
@@ -226,11 +238,18 @@ async def main(args):
         hub.register(out)
         sender = asyncio.create_task(_sender(ws, out))
         try:
-            await out.put(json.dumps({"type": "config", "browser_audio": args.browser_audio}))
+            await out.put(json.dumps({
+                "type": "config",
+                "browser_audio": args.browser_audio,
+                "profile": trans.profile,
+                "profiles": transcriber.ENGINE_PROFILES,
+            }))
             await out.put(json.dumps({
                 "type": "status",
-                **({} if not trans.is_ready else {"model": args.model}),
+                "model": trans.model_name,
                 "ready": trans.is_ready,
+                "profile": trans.profile,
+                "tick": trans.tick,
             }))
             async for raw in ws:
                 await handle_message(raw)
@@ -259,6 +278,10 @@ async def main(args):
         elif mtype == "stop":
             trans.stop()
             hub.schedule({"type": "status", "state": "stopped", "running": False})
+        elif mtype == "set_engine":
+            mode = msg.get("mode")
+            if mode and trans.set_profile(mode):
+                pass
         elif mtype == "audio" and args.browser_audio:
             data = msg.get("data")
             if isinstance(data, list) and data:
@@ -287,8 +310,8 @@ async def main(args):
         print(f"Local AI Teleprompter listening on {shown}", flush=True)
         print(f"  Open http://{args.host}:{args.port} in your browser", flush=True)
         print(f"  Mic backend: {'browser-audio (WS)' if args.browser_audio else 'sounddevice'}", flush=True)
-        print(f"  Model: {args.model} (compute_type={args.compute_type})", flush=True)
-        print("  First run downloads the model (~145MB). Press Ctrl+C to stop.", flush=True)
+        print(f"  Profile: {trans.profile} (model={trans.model_name}, tick={trans.tick}s, compute_type={args.compute_type})", flush=True)
+        print("  First run downloads the model if needed. Press Ctrl+C to stop.", flush=True)
         try:
             await asyncio.Future()
         finally:

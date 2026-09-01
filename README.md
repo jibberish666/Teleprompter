@@ -84,7 +84,8 @@ reliable fallback when the two clients conflict.
   override; the next server sync resumes from there).
 - **Mic Sensitivity** only tunes the local visual VU meter (green bar). Scrolling
   itself is driven by Whisper word sync, not the VU meter.
-- **Mirror Display**, **Font Size**, **Box Opacity** are cosmetic.
+- **Speech Recognition Preset**: Select between **Ultra Fast** (0.4s sync · `tiny.en`), **Fast** (0.6s sync · `base.en`), and **Standard** (1.2s sync · `base.en`) dynamically directly within the UI.
+- **Mirror Display**, **Font Size**, **Box Opacity**, **Camera Toggle & Zoom**, **Visible Lines** controls.
 - Accepts `.txt`, `.md`, `.docx`, `.pdf` and pasted text.
 
 ## Files
@@ -92,7 +93,7 @@ reliable fallback when the two clients conflict.
 ```
 server.py           # CLI, HTTP+WS co-host, session orchestration
 audio_capture.py    # sounddevice InputStream + ring buffer (16 kHz float32)
-transcriber.py      # faster-whisper load + rolling-window transcription loop
+transcriber.py      # faster-whisper load + rolling-window transcription loop with profile caching
 aligner.py          # ASR-word -> script-word fuzzy alignment (monotonic cursor)
 static/             # index.html, app.js, style.css (browser UI)
 teleprompter.html   # original single-file reference (kept intact)
