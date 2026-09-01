@@ -50,6 +50,9 @@
   const viewingWindow = document.getElementById('viewing-window');
   const cursorBar = document.getElementById('cursor-bar');
   const optRecordMode = document.getElementById('opt-record-mode');
+  const optRecordFormat = document.getElementById('opt-record-format');
+  const recordingFormatGroup = document.getElementById('recording-format-group');
+  const formatDesc = document.getElementById('format-desc');
   const optEngineSpeed = document.getElementById('opt-engine-speed');
   const engineBadge = document.getElementById('engine-badge');
   const engineDesc = document.getElementById('engine-desc');
@@ -91,10 +94,170 @@
     });
   }
 
-  let activeRecordMode = 'video';
-  let activeRecordingOptions = { mimeType: '', extension: 'webm' };
+  // ---- Audio & Video Format Configuration ----------------------------------
+  const VIDEO_FORMATS = [
+    { id: 'mp4', label: 'MP4 (.mp4)', desc: 'Universal MP4 video format (H.264/AAC)' },
+    { id: 'webm', label: 'WebM (.webm)', desc: 'High-efficiency WebM video format (VP9/Opus)' },
+  ];
 
-  function getAudioRecorderOptions() {
+  const AUDIO_FORMATS = [
+    { id: 'mp3', label: 'MP3 (.mp3)', desc: 'Universal compressed MP3 audio (192 kbps)' },
+    { id: 'wav', label: 'WAV (.wav)', desc: 'Lossless 16-bit PCM WAV (studio quality, uncompressed)' },
+    { id: 'webm', label: 'WebM (.webm)', desc: 'WebM Opus compressed audio' },
+  ];
+
+  let activeRecordMode = localStorage.getItem('teleprompter_record_mode') || 'video';
+  if (optRecordMode) optRecordMode.value = activeRecordMode;
+
+  let activeVideoFormat = localStorage.getItem('teleprompter_video_format') || 'mp4';
+  let activeAudioFormat = localStorage.getItem('teleprompter_audio_format') || 'mp3';
+  let activeRecordingOptions = { mimeType: '', extension: 'webm', format: 'webm' };
+
+  function updateFormatUI() {
+    const mode = optRecordMode ? optRecordMode.value : 'video';
+    activeRecordMode = mode;
+    localStorage.setItem('teleprompter_record_mode', mode);
+
+    if (mode === 'off') {
+      if (recordingFormatGroup) recordingFormatGroup.classList.add('hidden');
+    } else {
+      if (recordingFormatGroup) recordingFormatGroup.classList.remove('hidden');
+      if (optRecordFormat) {
+        optRecordFormat.innerHTML = '';
+        const formats = mode === 'video' ? VIDEO_FORMATS : AUDIO_FORMATS;
+        const currentSelected = mode === 'video' ? activeVideoFormat : activeAudioFormat;
+        formats.forEach((f) => {
+          const opt = document.createElement('option');
+          opt.value = f.id;
+          opt.textContent = f.label;
+          if (f.id === currentSelected) opt.selected = true;
+          optRecordFormat.appendChild(opt);
+        });
+        const chosen = formats.find((f) => f.id === optRecordFormat.value) || formats[0];
+        if (formatDesc) formatDesc.textContent = chosen ? chosen.desc : '';
+      }
+    }
+    updateStopButtonText();
+  }
+
+  if (optRecordMode) {
+    optRecordMode.addEventListener('change', updateFormatUI);
+  }
+
+  if (optRecordFormat) {
+    optRecordFormat.addEventListener('change', (e) => {
+      const mode = optRecordMode ? optRecordMode.value : 'video';
+      if (mode === 'video') {
+        activeVideoFormat = e.target.value;
+        localStorage.setItem('teleprompter_video_format', activeVideoFormat);
+      } else {
+        activeAudioFormat = e.target.value;
+        localStorage.setItem('teleprompter_audio_format', activeAudioFormat);
+      }
+      const formats = mode === 'video' ? VIDEO_FORMATS : AUDIO_FORMATS;
+      const chosen = formats.find((f) => f.id === e.target.value);
+      if (formatDesc && chosen) formatDesc.textContent = chosen.desc;
+      updateStopButtonText();
+    });
+  }
+
+  // ---- Audio Encoders (WAV & MP3) ------------------------------------------
+  function audioBufferToWav(audioBuffer) {
+    const numChannels = audioBuffer.numberOfChannels;
+    const sampleRate = audioBuffer.sampleRate;
+    const format = 1; // PCM
+    const bitDepth = 16;
+    const bytesPerSample = bitDepth / 8;
+    const blockAlign = numChannels * bytesPerSample;
+    const length = audioBuffer.length;
+    const byteRate = sampleRate * blockAlign;
+    const dataSize = length * blockAlign;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+
+    function writeString(offset, string) {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    }
+
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, format, true);
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitDepth, true);
+    writeString(36, 'data');
+    view.setUint32(40, dataSize, true);
+
+    let offset = 44;
+    const channelData = [];
+    for (let ch = 0; ch < numChannels; ch++) {
+      channelData.push(audioBuffer.getChannelData(ch));
+    }
+
+    for (let i = 0; i < length; i++) {
+      for (let ch = 0; ch < numChannels; ch++) {
+        let sample = channelData[ch][i];
+        sample = Math.max(-1, Math.min(1, sample));
+        const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+        view.setInt16(offset, intSample, true);
+        offset += 2;
+      }
+    }
+
+    return new Blob([view], { type: 'audio/wav' });
+  }
+
+  function audioBufferToMp3(audioBuffer, kbps = 192) {
+    if (typeof lamejs === 'undefined') {
+      throw new Error('MP3 encoder not available.');
+    }
+    const channels = audioBuffer.numberOfChannels;
+    const sampleRate = audioBuffer.sampleRate;
+    const mp3encoder = new lamejs.Mp3Encoder(channels, sampleRate, kbps);
+    const mp3Data = [];
+    const sampleBlockSize = 1152;
+
+    function floatToInt16(floatArr) {
+      const int16 = new Int16Array(floatArr.length);
+      for (let i = 0; i < floatArr.length; i++) {
+        const s = Math.max(-1, Math.min(1, floatArr[i]));
+        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return int16;
+    }
+
+    if (channels === 1) {
+      const samples = floatToInt16(audioBuffer.getChannelData(0));
+      for (let i = 0; i < samples.length; i += sampleBlockSize) {
+        const chunk = samples.subarray(i, i + sampleBlockSize);
+        const mp3buf = mp3encoder.encodeBuffer(chunk);
+        if (mp3buf.length > 0) mp3Data.push(mp3buf);
+      }
+    } else {
+      const left = floatToInt16(audioBuffer.getChannelData(0));
+      const right = floatToInt16(audioBuffer.getChannelData(1));
+      for (let i = 0; i < left.length; i += sampleBlockSize) {
+        const leftChunk = left.subarray(i, i + sampleBlockSize);
+        const rightChunk = right.subarray(i, i + sampleBlockSize);
+        const mp3buf = mp3encoder.encodeBuffer(leftChunk, rightChunk);
+        if (mp3buf.length > 0) mp3Data.push(mp3buf);
+      }
+    }
+
+    const endBuf = mp3encoder.flush();
+    if (endBuf.length > 0) mp3Data.push(endBuf);
+
+    return new Blob(mp3Data, { type: 'audio/mp3' });
+  }
+
+  function getAudioRecorderOptions(targetFormat) {
     const mimeTypes = [
       { mime: 'audio/webm;codecs=opus', ext: 'webm' },
       { mime: 'audio/webm', ext: 'webm' },
@@ -102,46 +265,66 @@
       { mime: 'audio/mp4', ext: 'm4a' },
       { mime: 'audio/aac', ext: 'm4a' }
     ];
+    let matchedMime = '';
     if (window.MediaRecorder && typeof MediaRecorder.isTypeSupported === 'function') {
       for (const item of mimeTypes) {
         if (MediaRecorder.isTypeSupported(item.mime)) {
-          return { mimeType: item.mime, extension: item.ext };
+          matchedMime = item.mime;
+          break;
         }
       }
     }
-    return { mimeType: '', extension: 'webm' };
+    const ext = targetFormat === 'wav' ? 'wav' : (targetFormat === 'mp3' ? 'mp3' : 'webm');
+    return { mimeType: matchedMime, extension: ext, format: targetFormat };
   }
 
-  function getVideoRecorderOptions() {
-    const mimeTypes = [
-      { mime: 'video/webm;codecs=vp9,opus', ext: 'webm' },
-      { mime: 'video/webm;codecs=vp8,opus', ext: 'webm' },
-      { mime: 'video/webm', ext: 'webm' },
-      { mime: 'video/mp4', ext: 'mp4' }
-    ];
-    if (window.MediaRecorder && typeof MediaRecorder.isTypeSupported === 'function') {
-      for (const item of mimeTypes) {
-        if (MediaRecorder.isTypeSupported(item.mime)) {
-          return { mimeType: item.mime, extension: item.ext };
+  function getVideoRecorderOptions(targetFormat) {
+    if (targetFormat === 'mp4') {
+      const mp4Mimes = [
+        'video/mp4;codecs=avc1,mp4a.40.2',
+        'video/mp4;codecs=avc1,opus',
+        'video/mp4;codecs=avc1',
+        'video/mp4;codecs=h264,aac',
+        'video/mp4;codecs=h264',
+        'video/mp4'
+      ];
+      if (window.MediaRecorder && typeof MediaRecorder.isTypeSupported === 'function') {
+        for (const mime of mp4Mimes) {
+          if (MediaRecorder.isTypeSupported(mime)) {
+            return { mimeType: mime, extension: 'mp4', format: 'mp4' };
+          }
         }
       }
     }
-    return { mimeType: '', extension: 'webm' };
+
+    const webmMimes = [
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm'
+    ];
+    if (window.MediaRecorder && typeof MediaRecorder.isTypeSupported === 'function') {
+      for (const mime of webmMimes) {
+        if (MediaRecorder.isTypeSupported(mime)) {
+          return { mimeType: mime, extension: 'webm', format: 'webm' };
+        }
+      }
+    }
+    return { mimeType: '', extension: 'webm', format: 'webm' };
   }
 
   function updateStopButtonText() {
     const mode = optRecordMode ? optRecordMode.value : 'video';
     if (mode === 'audio') {
-      btnStop.textContent = 'Stop & Save Audio';
+      const fmt = (activeAudioFormat || 'mp3').toUpperCase();
+      btnStop.textContent = `Stop & Save Audio (${fmt})`;
     } else if (mode === 'video') {
-      btnStop.textContent = 'Stop & Save Video';
+      const fmt = (activeVideoFormat || 'mp4').toUpperCase();
+      btnStop.textContent = `Stop & Save Video (${fmt})`;
     } else {
       btnStop.textContent = 'Stop Session';
     }
-  }
-
-  if (optRecordMode) {
-    optRecordMode.addEventListener('change', updateStopButtonText);
   }
 
   // ---- WebSocket -----------------------------------------------------------
@@ -575,6 +758,7 @@
 
     activeRecordMode = optRecordMode ? optRecordMode.value : 'video';
     if (optRecordMode) optRecordMode.disabled = true;
+    if (optRecordFormat) optRecordFormat.disabled = true;
 
     if (audioContext && audioContext.state === 'suspended') audioContext.resume();
 
@@ -593,9 +777,9 @@
         if (tracksToRecord.length > 0) {
           const hasVideoTrack = tracksToRecord.some((t) => t.kind === 'video');
           if (activeRecordMode === 'audio' || !hasVideoTrack) {
-            activeRecordingOptions = getAudioRecorderOptions();
+            activeRecordingOptions = getAudioRecorderOptions(activeAudioFormat);
           } else {
-            activeRecordingOptions = getVideoRecorderOptions();
+            activeRecordingOptions = getVideoRecorderOptions(activeVideoFormat);
           }
 
           const streamToRecord = new MediaStream(tracksToRecord);
@@ -632,31 +816,74 @@
   btnStop.addEventListener('click', () => {
     isPrompting = false;
     if (optRecordMode) optRecordMode.disabled = false;
+    if (optRecordFormat) optRecordFormat.disabled = false;
 
     send({ type: 'stop' });
 
     if (activeRecordMode !== 'off' && mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.onstop = () => {
-        const mimeType = activeRecordingOptions.mimeType || (activeRecordMode === 'audio' ? 'audio/webm' : 'video/webm');
-        const blob = new Blob(recordedChunks, { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-        const prefix = activeRecordMode === 'audio' ? 'Teleprompter-Audio' : 'Teleprompter-Session';
-        a.download = `${prefix}-${new Date().toISOString().slice(0, 10)}.${activeRecordingOptions.extension}`;
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => {
-          document.body.removeChild(a);
-          window.URL.revokeObjectURL(url);
-        }, 100);
+      mediaRecorder.onstop = async () => {
+        try {
+          const recordedBlob = new Blob(recordedChunks, { type: activeRecordingOptions.mimeType || 'audio/webm' });
+          let finalBlob = recordedBlob;
+          let finalExtension = activeRecordingOptions.extension;
+
+          // Convert to WAV or MP3 for audio if selected
+          if (activeRecordMode === 'audio' && (activeAudioFormat === 'wav' || activeAudioFormat === 'mp3')) {
+            setBadge(vadStatus, 'ENCODING…', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
+            speechHud.textContent = `Processing ${activeAudioFormat.toUpperCase()} audio…`;
+
+            const arrayBuffer = await recordedBlob.arrayBuffer();
+            const decodeContext = new (window.AudioContext || window.webkitAudioContext)();
+            const audioBuffer = await decodeContext.decodeAudioData(arrayBuffer);
+
+            if (activeAudioFormat === 'wav') {
+              finalBlob = audioBufferToWav(audioBuffer);
+              finalExtension = 'wav';
+            } else if (activeAudioFormat === 'mp3') {
+              finalBlob = audioBufferToMp3(audioBuffer, 192);
+              finalExtension = 'mp3';
+            }
+            try { decodeContext.close(); } catch (_) {}
+          }
+
+          const url = URL.createObjectURL(finalBlob);
+          const a = document.createElement('a');
+          a.style.display = 'none';
+          a.href = url;
+          const prefix = activeRecordMode === 'audio' ? 'Teleprompter-Audio' : 'Teleprompter-Session';
+          a.download = `${prefix}-${new Date().toISOString().slice(0, 10)}.${finalExtension}`;
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => {
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+          }, 150);
+
+          setBadge(vadStatus, 'SAVED', 'bg-green-950 text-green-400 border-green-500/30');
+          speechHud.textContent = activeRecordMode === 'audio'
+            ? `Session audio saved (${finalExtension.toUpperCase()})!`
+            : `Session video saved (${finalExtension.toUpperCase()})!`;
+        } catch (err) {
+          console.error('Error processing audio recording:', err);
+          // Fallback to saving raw blob directly
+          const fallbackBlob = new Blob(recordedChunks, { type: activeRecordingOptions.mimeType || 'audio/webm' });
+          const url = URL.createObjectURL(fallbackBlob);
+          const a = document.createElement('a');
+          a.style.display = 'none';
+          a.href = url;
+          const prefix = activeRecordMode === 'audio' ? 'Teleprompter-Audio' : 'Teleprompter-Session';
+          a.download = `${prefix}-${new Date().toISOString().slice(0, 10)}.${activeRecordingOptions.extension}`;
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => {
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+          }, 150);
+          setBadge(vadStatus, 'SAVED', 'bg-green-950 text-green-400 border-green-500/30');
+          speechHud.textContent = 'Session saved!';
+        }
       };
       mediaRecorder.stop();
-      setBadge(vadStatus, 'SAVED', 'bg-green-950 text-green-400 border-green-500/30');
-      speechHud.textContent = activeRecordMode === 'audio'
-        ? 'Session audio saved to your Mac!'
-        : 'Session recording saved to your Mac!';
     } else {
       setBadge(vadStatus, 'STOPPED', 'bg-gray-800 text-gray-400 border-gray-700');
       speechHud.textContent = 'Session ended.';
@@ -697,6 +924,7 @@
   });
 
   // ---- Boot ------------------------------------------------------------------
+  updateFormatUI();
   parseAndRenderTranscript();
   initCameraAndAudio();
   updateViewportLines(parseInt(optLines.value, 10));

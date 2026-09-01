@@ -31,6 +31,10 @@ MIME = {
     ".svg": "image/svg+xml",
     ".png": "image/png",
     ".json": "application/json; charset=utf-8",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
 }
 
 DEFAULTS = {

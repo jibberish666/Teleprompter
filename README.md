@@ -65,7 +65,10 @@ python server.py
    - **Fast**: `0.6s` sync rate (`base.en` model - recommended)
    - **Standard**: `1.2s` sync rate (`base.en` model)
 5. Click **Start Session**: Speak aloud and watch the text highlight and scroll automatically in real-time sync with your voice.
-6. Click **Stop & Save Video**: Download a `.webm` recording of the teleprompter session along with your narration audio.
+6. **Save Recordings**:
+   - **Video Mode**: Save as **MP4** (`.mp4`) or **WebM** (`.webm`).
+   - **Audio Mode**: Save as **MP3** (`.mp3`), **WAV** (`.wav` lossless PCM), or **WebM** (`.webm`).
+   - Click **Stop & Save** to download your session recording immediately to your computer.
 
 ---
 
