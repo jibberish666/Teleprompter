@@ -656,7 +656,7 @@
     if (captureNode) {
       try {
         captureNode.disconnect();
-      } catch (_) {}
+      } catch (_) { }
       captureNode = null;
     }
   }
@@ -861,7 +861,7 @@
               const extraW = rawWords[k];
               const extraClean = extraW.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
               if (PREPOSITIONS.has(extraClean) || CONJUNCTIONS.has(extraClean) ||
-                  ARTICLES_AND_PRONOUNS.has(extraClean) || COMMON_VERBS.has(extraClean)) break;
+                ARTICLES_AND_PRONOUNS.has(extraClean) || COMMON_VERBS.has(extraClean)) break;
               compSlice.push(extraW);
               k++;
               if (extraW.endsWith(',') || extraW.endsWith(';')) break;
@@ -1060,7 +1060,7 @@
   function parseAndRenderTranscript() {
     const rawText = transcriptInput.value;
     if (!rawText || !rawText.trim()) {
-      linesContainer.innerHTML = `<p class="h-[45px] flex items-center justify-center text-gray-400 italic">Paste script & press Start Session...</p>`;
+      linesContainer.innerHTML = `<p class="h-[45px] flex items-center justify-start px-5 text-gray-400 italic">Paste script & press Start Session...</p>`;
       linesData = [];
       allWords = [];
       currentWordIndex = 0;
@@ -1125,7 +1125,7 @@
     }
 
     if (linesData.length === 0 || allWords.length === 0) {
-      linesContainer.innerHTML = `<p class="h-[45px] flex items-center justify-center text-gray-400 italic">Paste script & press Start Session...</p>`;
+      linesContainer.innerHTML = `<p class="h-[45px] flex items-center justify-start px-5 text-gray-400 italic">Paste script & press Start Session...</p>`;
       currentWordIndex = 0;
       currentLineIndex = 0;
       return;
@@ -1133,12 +1133,12 @@
 
     linesContainer.innerHTML = linesData.map((line) => {
       if (line.isBlank) {
-        return `<div id="line-${line.lineIdx}" class="h-[45px] flex items-center justify-center px-4 select-none opacity-40"><span class="inline-block w-8 h-[2px] bg-indigo-400/50 rounded-full"></span></div>`;
+        return `<div id="line-${line.lineIdx}" class="prompter-line prompter-line-blank select-none"><span class="inline-block w-8 h-[2px] bg-indigo-400/50 rounded-full"></span></div>`;
       }
       const wordsHTML = line.words
-        .map((w) => `<span id="w-${w.globalIdx}" class="inline-block mx-1 px-1.5 py-0.5 rounded transition-all duration-150 cursor-pointer hover:text-white">${w.original}</span>`)
-        .join('');
-      return `<div id="line-${line.lineIdx}" class="h-[45px] flex items-center justify-center px-4 whitespace-nowrap text-white/60">${wordsHTML}</div>`;
+        .map((w) => `<span id="w-${w.globalIdx}" class="prompter-word">${w.original}</span>`)
+        .join(' ');
+      return `<div id="line-${line.lineIdx}" class="prompter-line line-upcoming">${wordsHTML}</div>`;
     }).join('');
 
     currentWordIndex = 0;
@@ -1150,28 +1150,31 @@
   function updateHighlighting(wordIndex) {
     if (!allWords.length) return;
 
-    const oldWord = linesContainer.querySelector('.bg-yellow-400');
-    if (oldWord) oldWord.classList.remove('bg-yellow-400', 'text-black', 'font-bold');
-
-    const oldLine = linesContainer.querySelector('.text-white.font-bold');
-    if (oldLine) {
-      oldLine.classList.remove('text-white', 'font-bold');
-      oldLine.classList.add('text-white/60');
-    }
+    const oldWord = linesContainer.querySelector('.word-active');
+    if (oldWord) oldWord.classList.remove('word-active');
 
     const activeWordObj = allWords[wordIndex];
     if (!activeWordObj) return;
 
+    currentWordIndex = wordIndex;
     currentLineIndex = activeWordObj.lineIdx;
 
     const wordSpan = document.getElementById(`w-${wordIndex}`);
-    if (wordSpan) wordSpan.classList.add('bg-yellow-400', 'text-black', 'font-bold');
+    if (wordSpan) wordSpan.classList.add('word-active');
 
-    const lineDiv = document.getElementById(`line-${currentLineIndex}`);
-    if (lineDiv) {
-      lineDiv.classList.remove('text-white/60');
-      lineDiv.classList.add('text-white', 'font-bold');
-    }
+    const allLineDivs = linesContainer.querySelectorAll('.prompter-line');
+    allLineDivs.forEach((lineEl, idx) => {
+      if (idx === currentLineIndex) {
+        lineEl.classList.remove('line-upcoming', 'line-past');
+        lineEl.classList.add('line-active');
+      } else if (idx > currentLineIndex) {
+        lineEl.classList.remove('line-active', 'line-past');
+        lineEl.classList.add('line-upcoming');
+      } else {
+        lineEl.classList.remove('line-active', 'line-upcoming');
+        lineEl.classList.add('line-past');
+      }
+    });
 
     const translateY = -(currentLineIndex * 45);
     scrollingContent.style.transform = `translateY(${translateY}px)`;
@@ -1285,7 +1288,7 @@
               finalBlob = audioBufferToMp3(audioBuffer, 192);
               finalExtension = 'mp3';
             }
-            try { decodeContext.close(); } catch (_) {}
+            try { decodeContext.close(); } catch (_) { }
           }
 
           const url = URL.createObjectURL(finalBlob);
