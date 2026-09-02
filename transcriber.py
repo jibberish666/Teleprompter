@@ -57,7 +57,7 @@ class Transcriber:
         tick=None,
         beam_size=None,
         align_window=5,
-        align_tolerance=3,
+        align_tolerance=5,
         on_sync=None,
         on_status=None,
         on_error=None,
@@ -81,7 +81,8 @@ class Transcriber:
 
         self.model = None
         self.aligner = None
-        self.committed_abs_end = 0
+        self.committed_abs_end = 0.0
+        self.silent_ticks = 0
         # Small tail overlap: words ending within this margin of the live edge
         # are treated as "too new" and left for the next tick.
         self.commit_margin_s = 0.5
@@ -197,12 +198,19 @@ class Transcriber:
             window=self.align_window,
             tolerance=self.align_tolerance,
         )
-        self.committed_abs_end = 0
+        self.committed_abs_end = 0.0
+        self.silent_ticks = 0
         self.audio.reset()
         self._running.set()
 
+    def seek(self, idx):
+        """Forward manual seek/jump to aligner."""
+        if self.aligner is not None:
+            self.aligner.seek(idx)
+
     def stop(self):
         self._running.clear()
+        self.silent_ticks = 0
 
     def shutdown(self):
         self._stop.set()
@@ -236,12 +244,22 @@ class Transcriber:
         # window to peak 1.0 so quiet mics and synth clips are detected.
         peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
         if peak < 1e-5:
+            self.silent_ticks += 1
+            if self.silent_ticks == 4 and self.on_status:
+                self.on_status({
+                    "mic_warning": True,
+                    "message": "Selected audio input is silent (no signal detected). Switch audio source or select 'Browser Microphone' in Script & Options.",
+                })
             return
+        else:
+            if self.silent_ticks >= 4 and self.on_status:
+                self.on_status({"mic_warning": False})
+            self.silent_ticks = 0
         if abs(peak - 1.0) > 1e-3:
             audio = audio / peak
 
-        start_abs = self.audio.total_samples() - len(audio)
-        commit_limit = len(audio) - int(RATE * self.commit_margin_s)
+        start_abs_s = (self.audio.total_samples() - len(audio)) / float(RATE)
+        commit_limit_s = (len(audio) / float(RATE)) - self.commit_margin_s
 
         segments, _info = self.model.transcribe(
             audio,
@@ -254,16 +272,19 @@ class Transcriber:
         new_words = []
         for seg in segments:
             for w in (seg.words or []):
-                s = int(w.start * RATE)
-                e = int(w.end * RATE)
-                if s >= commit_limit:
+                if w.start >= commit_limit_s:
                     # Word starts too close to the live edge: wait for more audio.
                     continue
-                abs_end = start_abs + e
-                if abs_end <= self.committed_abs_end:
+                abs_start = start_abs_s + w.start
+                abs_end = start_abs_s + w.end
+                # Word must not end before already committed boundary, and its start
+                # must not be significantly behind the committed boundary (prevents jitter duplicates)
+                if abs_end <= self.committed_abs_end or abs_start < (self.committed_abs_end - 0.15):
                     continue
-                self.committed_abs_end = abs_end
-                new_words.append(aligner.normalize(w.word))
+                self.committed_abs_end = max(self.committed_abs_end, abs_end)
+                norm = aligner.normalize(w.word)
+                if norm:
+                    new_words.append(norm)
 
         if not new_words or self.aligner is None:
             return

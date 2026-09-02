@@ -30,6 +30,10 @@ MIME = {
     ".css": "text/css; charset=utf-8",
     ".svg": "image/svg+xml",
     ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
     ".json": "application/json; charset=utf-8",
     ".mp3": "audio/mpeg",
     ".wav": "audio/wav",
@@ -47,7 +51,7 @@ DEFAULTS = {
     "tick": 1.2,
     "window": 4.0,
     "align_window": 5,
-    "align_tolerance": 3,
+    "align_tolerance": 5,
 }
 
 
@@ -121,6 +125,23 @@ def resolve_mic(name):
     return target
 
 
+def get_audio_devices():
+    devices = [
+        {"id": "browser", "name": "Browser Microphone (Live WebRTC · Recommended)"}
+    ]
+    try:
+        dev_list = sd.query_devices()
+        default_in = sd.default.device[0] if sd.default.device else -1
+        for idx, dev in enumerate(dev_list):
+            if dev.get("max_input_channels", 0) > 0:
+                is_def = (idx == default_in)
+                label = dev["name"] + (" (System Default)" if is_def else "")
+                devices.append({"id": str(idx), "name": label, "is_default": is_def})
+    except Exception as e:
+        print(f"Error querying audio devices: {e}", flush=True)
+    return devices
+
+
 class SyncHub:
     """Broadcasts payloads to all connected WebSocket clients."""
 
@@ -136,7 +157,8 @@ class SyncHub:
 
     def schedule(self, payload):
         # Safe to call from the transcriber thread.
-        self.loop.call_soon_threadsafe(self._publish, payload)
+        if not self.loop.is_closed():
+            self.loop.call_soon_threadsafe(self._publish, payload)
 
     def _publish(self, payload):
         text = json.dumps(payload)
@@ -244,9 +266,11 @@ async def main(args):
         try:
             await out.put(json.dumps({
                 "type": "config",
-                "browser_audio": args.browser_audio,
+                "browser_audio": capture.browser_audio,
                 "profile": trans.profile,
                 "profiles": transcriber.ENGINE_PROFILES,
+                "audio_devices": get_audio_devices(),
+                "active_audio_device": capture.active_device_id,
             }))
             await out.put(json.dumps({
                 "type": "status",
@@ -254,6 +278,7 @@ async def main(args):
                 "ready": trans.is_ready,
                 "profile": trans.profile,
                 "tick": trans.tick,
+                "active_audio_device": capture.active_device_id,
             }))
             async for raw in ws:
                 await handle_message(raw)
@@ -282,25 +307,33 @@ async def main(args):
         elif mtype == "stop":
             trans.stop()
             hub.schedule({"type": "status", "state": "stopped", "running": False})
+        elif mtype == "seek":
+            idx = msg.get("word_index")
+            if idx is not None:
+                trans.seek(int(idx))
         elif mtype == "set_engine":
             mode = msg.get("mode")
             if mode and trans.set_profile(mode):
                 pass
-        elif mtype == "audio" and args.browser_audio:
-            data = msg.get("data")
-            if isinstance(data, list) and data:
-                import numpy as np
-                capture.write_frames(np.asarray(data, dtype=np.float32))
-            elif msg.get("b64"):
-                pass
+        elif mtype == "set_audio_device":
+            device = msg.get("device")
+            if device is not None:
+                capture.set_device(device)
+                hub.schedule({
+                    "type": "audio_device_changed",
+                    "device": capture.active_device_id,
+                    "is_browser": capture.browser_audio,
+                })
+        elif mtype == "audio":
+            if capture.browser_audio:
+                data = msg.get("data")
+                if isinstance(data, list) and data:
+                    import numpy as np
+                    capture.write_frames(np.asarray(data, dtype=np.float32))
+                elif msg.get("b64"):
+                    pass
 
-    capture.start()
-    trans.start_loading_async()
-    trans.start_loop()
-
-    save_persisted_config(args.port)
-
-    # Slight backlog so slow transcription / large model download don't block UI.
+    # Bind first: if port is in use or bind fails, background threads won't be orphaned.
     async with serve(
         handle_client,
         args.host,
@@ -309,6 +342,11 @@ async def main(args):
         max_size=2 * 1024 * 1024,
         compression=None,
     ) as server:
+        save_persisted_config(args.port)
+        capture.start()
+        trans.start_loading_async()
+        trans.start_loop()
+
         shown = ", ".join(str(s.getsockname()) for s in server.sockets) \
             if server.sockets else f"{args.host}:{args.port}"
         print(f"Local AI Teleprompter listening on {shown}", flush=True)

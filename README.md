@@ -9,12 +9,15 @@ Everything runs on your local machine—no cloud APIs, no accounts, and no speec
 
 ---
 
-## 📢 What's New in v1.1.0
+## 📢 What's New in v1.2.0
 
-- **Multi-Format Audio Export**: Save audio sessions directly as **MP3** (`.mp3` @ 192 kbps), **WAV** (`.wav` lossless 16-bit PCM), or **WebM** (`.webm`).
-- **MP4 & WebM Video Export**: Save video recordings directly in universal **MP4** (`.mp4`) format or lightweight **WebM** (`.webm`).
-- **Dynamic Format Selector**: Intuitive dropdown in the Recording panel automatically adapts based on chosen record mode (*Video & Audio* vs *Audio Only*).
-- **100% Local & Offline**: Audio conversions and MP3 encoding run completely client-side with embedded encoders.
+- **Redesigned Speech Alignment Engine**: Tight local-window matching with distance penalties and mandatory multi-word sequence verification (2–3 words) for lookahead jumps, eliminating false-positive word leaps.
+- **Morphological & Compound Word Matching**: Handles natural inflections (`"balance"` $\leftrightarrow$ `"balancing"`, `"assembly"` $\leftrightarrow$ `"assemblies"`, `"accelerates"` $\leftrightarrow$ `"accelerating"`) and compound tokens (`["high", "speed"]` $\leftrightarrow$ `"highspeed"`).
+- **Dynamic Audio Source Selector**: Switch seamlessly in the UI between **Browser Microphone (Live WebRTC · Recommended)** and host hardware sound devices on the fly.
+- **Silent Input Warning & Recovery**: Real-time silence monitoring flags muted or inactive microphones (`MIC SILENT`) and guides input resolution.
+- **Bi-Directional Seek Synchronization**: Manually jumping via Arrow keys, clicking any transcript word, or clicking **Restart Script** instantly resynchronizes the backend aligner.
+- **Custom Brand Favicon Suite**: Native cross-device favicons (`favicon.ico`, PNGs, and Apple touch icon).
+- **Automated Test Suite**: 18 unit and real-session playback tests in `test_aligner.py`.
 - See full notes in [CHANGELOG.md](file:///Users/philkershaw/Documents/work/Tools/teleprompter/CHANGELOG.md) or the [Releases Page](https://github.com/jibberish666/Teleprompter/releases).
 
 ---
@@ -87,9 +90,25 @@ python server.py
 
 ## 🎛️ Keyboard & UI Controls
 
-- **Arrow Up / Down**: Manually adjust/override highlight position (resumes auto-sync on next word match).
-- **Speech Preset Dropdown**: Switch latency and models dynamically on the fly.
-- **Display Adjustments**: Mirror display (flip horizontal), font size, line spacing, box opacity, visible line count, camera overlay toggle & zoom.
+- **Restart Script Button**: Rewind instantly back to the first word without modifying or clearing text.
+- **Click to Seek**: Click any word in the transcript display to immediately move the highlight and resynchronize the backend aligner.
+- **Arrow Up / Down**: Manually step the highlight backward or forward (backend aligner syncs automatically).
+- **Speech Preset Dropdown**: Switch latency and models dynamically on the fly (*Ultra Fast*, *Fast*, *Standard*).
+- **Microphone Input Selector**: Open **Script & Options** $\rightarrow$ **Microphone Input** to select between **Browser Microphone** (zero host conflicts) and detected hardware sound devices.
+- **Display Adjustments**: Mirror display (flip horizontal for physical glass rigs), font size, line spacing, box opacity, visible line count, camera overlay toggle & zoom.
+
+---
+
+## 🧪 Automated Testing
+
+A dedicated test suite tests the alignment logic, multi-word lookahead confirmation, compound words, morphological inflections, and real-session playback:
+
+```bash
+# Run test suite
+python3 test_aligner.py
+# or using the virtual environment:
+.venv/bin/python3 test_aligner.py
+```
 
 ---
 
@@ -98,7 +117,7 @@ python server.py
 ```bash
 python server.py --port 8000 --host 127.0.0.1 --model base.en \
                  --compute-type int8 --mic <device> --tick 1.2 \
-                 --window 4.0 --align-window 5 --align-tolerance 3 \
+                 --window 4.0 --align-window 5 --align-tolerance 5 \
                  [--browser-audio]
 ```
 
@@ -113,27 +132,30 @@ python server.py --port 8000 --host 127.0.0.1 --model base.en \
 | `--tick` | `1.2` | Transcription interval pass in seconds |
 | `--window` | `4.0` | Rolling audio window size (seconds) re-transcribed each tick |
 | `--align-window` | `5` | Script word search radius around cursor |
-| `--align-tolerance` | `3` | Consecutive ASR misses allowed before pausing |
+| `--align-tolerance` | `5` | Consecutive ASR misses allowed before pausing |
 | `--browser-audio` | off | Stream 16 kHz PCM audio from browser over WebSocket instead of host mic |
 
 All options support environment variable fallbacks: `TELEPROMPTER_PORT`, `TELEPROMPTER_HOST`, `TELEPROMPTER_MODEL`, `TELEPROMPTER_COMPUTE_TYPE`, `TELEPROMPTER_DEVICE`, `TELEPROMPTER_MIC`.
 
 ---
 
-## 🔧 macOS Mic Conflict & Troubleshooting
+## 🔧 Audio Routing & Troubleshooting
 
-### Audio / Sync Issue (macOS)
-By default, the backend captures audio via `sounddevice` while the browser requests camera/mic for video recording. On some macOS configurations, audio routing may conflict between clients.
+### Audio / Sync Issue (macOS & multi-mic setups)
+By default on macOS, hardware audio devices can experience exclusivity or sample-rate conflicts if both the browser (recording video) and Python backend (`sounddevice`) attempt to access the microphone simultaneously.
 
-If the prompter does not advance when speaking:
-1. Select your specific mic index via `--mic <index>` (run `python server.py` to view available device indices).
-2. Or use the WebSocket browser audio fallback:
-   ```bash
-   ./run.sh --browser-audio
-   ```
+**Solutions**:
+1. **In-UI Audio Source (Recommended)**:
+   In **Script & Options**, leave or set **Microphone Input** to **`Browser Microphone (WebRTC · Recommended)`**. This streams the audio directly from your active browser tab to the backend over WebSocket with zero device contention.
+2. **Hardware Device**:
+   Select your specific hardware microphone from the **Microphone Input** dropdown or specify `--mic <index>` on startup.
+3. **Silent Mic Detection**:
+   If no audio signal is detected for 4 consecutive ticks, the teleprompter displays a pulsing `MIC SILENT` badge to alert you to check microphone permissions or switch audio sources.
 
 ### Status Badges
 - **OFFLINE ENGINE READY**: Model loaded successfully into memory.
+- **SYNCING – VOICE DETECTED**: Audio active and words matching.
+- **MIC SILENT**: Selected microphone is producing no audio signal.
 - **Start button disabled**: Model is currently downloading/loading. Check server terminal for progress.
 
 ---
@@ -142,12 +164,14 @@ If the prompter does not advance when speaking:
 
 ```
 server.py            # Main server CLI, HTTP & WebSocket server
-audio_capture.py     # sounddevice InputStream & ring buffer
+audio_capture.py     # sounddevice InputStream, ring buffer & dynamic device routing
 transcriber.py       # faster-whisper inference engine & profile manager
-aligner.py           # ASR-to-script fuzzy word alignment logic
-static/              # Web UI (index.html, app.js, style.css)
+aligner.py           # Redesigned locality-first fuzzy word aligner with lookahead verification
+test_aligner.py      # Test suite (18 unit & real-session playback tests)
+static/              # Web UI (index.html, app.js, style.css, favicons, encoders)
 teleprompter.command # macOS double-clickable launcher
 run.sh               # Shell startup script
+.agents/             # Agent skills and audio tracking reference documentation
 ```
 
 ---

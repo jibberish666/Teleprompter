@@ -80,15 +80,47 @@ class AudioCapture:
         if self.browser_audio:
             # Frames are injected by the server via write_frames(); no device owned.
             return
-        self.stream = sd.InputStream(
-            samplerate=self.rate,
-            channels=1,
-            dtype="float32",
-            device=self.device,
-            blocksize=1600,
-            callback=self._callback,
-        )
-        self.stream.start()
+        if self.stream is not None:
+            return
+        try:
+            self.stream = sd.InputStream(
+                samplerate=self.rate,
+                channels=1,
+                dtype="float32",
+                device=self.device,
+                blocksize=1600,
+                callback=self._callback,
+            )
+            self.stream.start()
+        except Exception as e:
+            print(f"Error opening audio device {self.device}: {e}", flush=True)
+            self.stream = None
+
+    def set_device(self, device):
+        """Switch audio device dynamically ('browser' or int/string device name)."""
+        self.stop()
+        if device == "browser":
+            self.browser_audio = True
+            self.device = None
+            return True
+        self.browser_audio = False
+        try:
+            self.device = int(device)
+        except (ValueError, TypeError):
+            self.device = device
+        self.start()
+        return True
+
+    @property
+    def active_device_id(self):
+        if self.browser_audio:
+            return "browser"
+        if self.device is not None:
+            return str(self.device)
+        try:
+            return str(sd.default.device[0])
+        except Exception:
+            return "0"
 
     def _callback(self, indata, frames, time_info, status):
         if status:

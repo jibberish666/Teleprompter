@@ -34,6 +34,7 @@
   const prompterBox = document.getElementById('prompter-box');
   const btnStart = document.getElementById('btn-start');
   const btnStop = document.getElementById('btn-stop');
+  const btnReset = document.getElementById('btn-reset');
   const vadStatus = document.getElementById('vad-status');
   const wsStatus = document.getElementById('ws-status');
   const speechHud = document.getElementById('speech-hud');
@@ -56,6 +57,11 @@
   const optEngineSpeed = document.getElementById('opt-engine-speed');
   const engineBadge = document.getElementById('engine-badge');
   const engineDesc = document.getElementById('engine-desc');
+  const optAudioSource = document.getElementById('opt-audio-source');
+  const audioSourceBadge = document.getElementById('audio-source-badge');
+  const audioSourceDesc = document.getElementById('audio-source-desc');
+  let activeAudioSource = localStorage.getItem('teleprompter_audio_device') || 'browser';
+  let availableAudioDevices = [];
 
   const ENGINE_DESCRIPTIONS = {
     ultrafast: '0.4s interval, tiny.en model (lowest latency, snappiest)',
@@ -91,6 +97,53 @@
       localStorage.setItem('teleprompter_engine_speed', mode);
       updateEngineUI(mode);
       send({ type: 'set_engine', mode: mode });
+    });
+  }
+
+  // ---- Audio Source Selection (Browser WebRTC vs Hardware Mic) -------------
+  function updateAudioSourceUI(deviceId, devicesList) {
+    if (devicesList && devicesList.length) {
+      availableAudioDevices = devicesList;
+      if (optAudioSource) {
+        optAudioSource.innerHTML = '';
+        devicesList.forEach((d) => {
+          const opt = document.createElement('option');
+          opt.value = d.id;
+          opt.textContent = d.name;
+          if (String(d.id) === String(deviceId)) opt.selected = true;
+          optAudioSource.appendChild(opt);
+        });
+      }
+    }
+    activeAudioSource = String(deviceId);
+    if (optAudioSource) {
+      optAudioSource.value = activeAudioSource;
+    }
+    const isBrowser = activeAudioSource === 'browser';
+    if (audioSourceBadge) {
+      audioSourceBadge.textContent = isBrowser ? 'Browser Mic' : 'Hardware Mic';
+      audioSourceBadge.className = 'text-[10px] px-1.5 py-0.5 rounded font-mono border ' +
+        (isBrowser ? 'bg-green-950 text-green-300 border-green-700/50' : 'bg-indigo-950 text-indigo-300 border-indigo-700/50');
+    }
+    if (audioSourceDesc) {
+      audioSourceDesc.textContent = isBrowser
+        ? 'Streams directly from your active browser tab mic (matches VU meter).'
+        : 'Backend captures directly from host hardware sound device.';
+    }
+  }
+
+  if (optAudioSource) {
+    optAudioSource.addEventListener('change', (e) => {
+      const devId = e.target.value;
+      activeAudioSource = devId;
+      localStorage.setItem('teleprompter_audio_device', devId);
+      updateAudioSourceUI(devId);
+      send({ type: 'set_audio_device', device: devId });
+      if (devId === 'browser') {
+        if (isPrompting) startBrowserAudioStream();
+      } else {
+        stopBrowserAudioStream();
+      }
     });
   }
 
@@ -364,9 +417,20 @@
           const saved = localStorage.getItem('teleprompter_engine_speed');
           if (!saved) updateEngineUI(msg.profile);
         }
-        if (browserAudio && audioContext && audioContext.state === 'running') {
+        if (msg.audio_devices) {
+          const savedDev = localStorage.getItem('teleprompter_audio_device');
+          const activeDev = savedDev || msg.active_audio_device || 'browser';
+          updateAudioSourceUI(activeDev, msg.audio_devices);
+          if (savedDev && String(savedDev) !== String(msg.active_audio_device)) {
+            send({ type: 'set_audio_device', device: savedDev });
+          }
+        }
+        if (activeAudioSource === 'browser' && isPrompting && audioContext && audioContext.state === 'running') {
           startBrowserAudioStream();
         }
+        break;
+      case 'audio_device_changed':
+        updateAudioSourceUI(msg.device);
         break;
       case 'status':
         onStatus(msg);
@@ -386,6 +450,16 @@
   function onStatus(msg) {
     if (msg.profile) {
       updateEngineUI(msg.profile);
+    }
+    if (msg.active_audio_device && !availableAudioDevices.length) {
+      updateAudioSourceUI(msg.active_audio_device);
+    }
+    if (msg.mic_warning === true) {
+      setBadge(vadStatus, 'MIC SILENT', 'bg-red-950 text-red-400 border-red-500/30 animate-pulse');
+      speechHud.textContent = '⚠️ ' + (msg.message || 'Selected microphone is silent. Try Browser Microphone in Options.');
+    } else if (msg.mic_warning === false && isPrompting) {
+      setBadge(vadStatus, 'SYNCING – VOICE DETECTED', 'bg-green-950 text-green-400 border-green-500/30');
+      speechHud.textContent = 'Voice detected → advancing transcript…';
     }
     if (typeof msg.ready === 'boolean') {
       modelReady = msg.ready;
@@ -519,35 +593,48 @@
     }
   }
 
-  // ---- Browser-audio streaming (--browser-audio fallback) ------------------
+  // ---- Browser-audio streaming (WebRTC audio to WebSocket) ------------------
   function startBrowserAudioStream() {
     if (captureNode || !audioContext || !audioStream) return;
-    const source = audioContext.createMediaStreamSource(audioStream);
-    captureNode = audioContext.createScriptProcessor(4096, 1, 1);
-    const silent = audioContext.createGain();
-    silent.gain.value = 0;
-    source.connect(captureNode);
-    captureNode.connect(silent);
-    silent.connect(audioContext.destination);
+    if (activeAudioSource !== 'browser') return;
+    try {
+      const source = audioContext.createMediaStreamSource(audioStream);
+      captureNode = audioContext.createScriptProcessor(4096, 1, 1);
+      const silent = audioContext.createGain();
+      silent.gain.value = 0;
+      source.connect(captureNode);
+      captureNode.connect(silent);
+      silent.connect(audioContext.destination);
 
-    captureNode.onaudioprocess = (e) => {
-      if (!isPrompting || !ws || ws.readyState !== WebSocket.OPEN) return;
-      const raw = e.inputBuffer.getChannelData(0);
-      const ratio = audioContext.sampleRate / 16000;
-      const outLen = Math.floor(raw.length / ratio);
-      if (outLen < 1) return;
-      const out = new Float32Array(outLen);
-      // Simple decimation-with-averaging downsample to 16 kHz.
-      let sum = 0, count = 0, oi = 0;
-      for (let i = 0; i < raw.length; i++) {
-        sum += raw[i]; count++;
-        if (count >= ratio) {
-          out[oi++] = sum / count;
-          sum = 0; count = 0;
+      captureNode.onaudioprocess = (e) => {
+        if (!isPrompting || !ws || ws.readyState !== WebSocket.OPEN) return;
+        if (activeAudioSource !== 'browser') return;
+        const raw = e.inputBuffer.getChannelData(0);
+        const ratio = audioContext.sampleRate / 16000;
+        const outLen = Math.floor(raw.length / ratio);
+        if (outLen < 1) return;
+        const out = new Float32Array(outLen);
+        for (let i = 0; i < outLen; i++) {
+          const srcPos = i * ratio;
+          const idx0 = Math.floor(srcPos);
+          const idx1 = Math.min(raw.length - 1, idx0 + 1);
+          const frac = srcPos - idx0;
+          out[i] = raw[idx0] * (1 - frac) + raw[idx1] * frac;
         }
-      }
-      if (oi > 0) send({ type: 'audio', data: Array.from(out.subarray(0, oi)) });
-    };
+        send({ type: 'audio', data: Array.from(out) });
+      };
+    } catch (err) {
+      console.error('Error initializing browser audio stream:', err);
+    }
+  }
+
+  function stopBrowserAudioStream() {
+    if (captureNode) {
+      try {
+        captureNode.disconnect();
+      } catch (_) {}
+      captureNode = null;
+    }
   }
 
   // ---- Camera controls --------------------------------------------------------
@@ -762,7 +849,9 @@
 
     if (audioContext && audioContext.state === 'suspended') audioContext.resume();
 
-    if (browserAudio && audioContext.state === 'running') startBrowserAudioStream();
+    if (activeAudioSource === 'browser' && audioContext && audioContext.state === 'running') {
+      startBrowserAudioStream();
+    }
 
     if (activeRecordMode !== 'off') {
       try {
@@ -815,6 +904,7 @@
 
   btnStop.addEventListener('click', () => {
     isPrompting = false;
+    stopBrowserAudioStream();
     if (optRecordMode) optRecordMode.disabled = false;
     if (optRecordFormat) optRecordFormat.disabled = false;
 
@@ -895,15 +985,17 @@
     updateStartButton();
   });
 
-  // ---- Keyboard manual stepping (local override) ----------------------------
+  // ---- Keyboard manual stepping (local override + backend sync) ------------
   window.addEventListener('keydown', (e) => {
     if (document.activeElement === transcriptInput) return;
     if (e.code === 'ArrowDown' && allWords.length) {
       currentWordIndex = Math.min(allWords.length - 1, currentWordIndex + 1);
       updateHighlighting(currentWordIndex);
+      send({ type: 'seek', word_index: currentWordIndex });
     } else if (e.code === 'ArrowUp' && allWords.length) {
       currentWordIndex = Math.max(0, currentWordIndex - 1);
       updateHighlighting(currentWordIndex);
+      send({ type: 'seek', word_index: currentWordIndex });
     }
   });
 
@@ -915,9 +1007,24 @@
       if (!isNaN(idx) && idx >= 0 && idx < allWords.length) {
         currentWordIndex = idx;
         updateHighlighting(idx);
+        send({ type: 'seek', word_index: idx });
       }
     }
   });
+
+  if (btnReset) {
+    btnReset.addEventListener('click', () => {
+      if (allWords.length > 0) {
+        currentWordIndex = 0;
+        currentLineIndex = 0;
+        updateHighlighting(0);
+        send({ type: 'seek', word_index: 0 });
+      } else {
+        parseAndRenderTranscript();
+      }
+      speechHud.textContent = 'Script reset to start.';
+    });
+  }
 
   document.getElementById('btn-toggle-panel').addEventListener('click', () => {
     document.getElementById('side-panel').classList.toggle('hidden');
@@ -925,6 +1032,10 @@
 
   // ---- Boot ------------------------------------------------------------------
   updateFormatUI();
+  updateAudioSourceUI(activeAudioSource);
+  if (optFontsize) {
+    linesContainer.style.fontSize = `${optFontsize.value}px`;
+  }
   parseAndRenderTranscript();
   initCameraAndAudio();
   updateViewportLines(parseInt(optLines.value, 10));
