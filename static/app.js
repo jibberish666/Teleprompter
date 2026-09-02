@@ -912,6 +912,14 @@
 
     if (activeRecordMode !== 'off' && mediaRecorder && mediaRecorder.state !== 'inactive') {
       mediaRecorder.onstop = async () => {
+        function getRecordingFilename(extension) {
+          const prefix = activeRecordMode === 'audio' ? 'Teleprompter-Audio' : 'Teleprompter-Session';
+          const now = new Date();
+          const pad = (n) => String(n).padStart(2, '0');
+          const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+          return `${prefix}-${dateStr}.${extension}`;
+        }
+
         try {
           const recordedBlob = new Blob(recordedChunks, { type: activeRecordingOptions.mimeType || 'audio/webm' });
           let finalBlob = recordedBlob;
@@ -940,8 +948,7 @@
           const a = document.createElement('a');
           a.style.display = 'none';
           a.href = url;
-          const prefix = activeRecordMode === 'audio' ? 'Teleprompter-Audio' : 'Teleprompter-Session';
-          a.download = `${prefix}-${new Date().toISOString().slice(0, 10)}.${finalExtension}`;
+          a.download = getRecordingFilename(finalExtension);
           document.body.appendChild(a);
           a.click();
           setTimeout(() => {
@@ -961,8 +968,7 @@
           const a = document.createElement('a');
           a.style.display = 'none';
           a.href = url;
-          const prefix = activeRecordMode === 'audio' ? 'Teleprompter-Audio' : 'Teleprompter-Session';
-          a.download = `${prefix}-${new Date().toISOString().slice(0, 10)}.${activeRecordingOptions.extension}`;
+          a.download = getRecordingFilename(activeRecordingOptions.extension);
           document.body.appendChild(a);
           a.click();
           setTimeout(() => {
