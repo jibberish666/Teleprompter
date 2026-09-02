@@ -1,8 +1,21 @@
 # 🎙️ Local AI Teleprompter
 
+[![Latest Release](https://img.shields.io/github/v/release/jibberish666/Teleprompter?color=indigo&label=Release)](https://github.com/jibberish666/Teleprompter/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+
 A 100% local, speech-synchronized AI teleprompter. It captures your microphone, transcribes speech in real time with a local Whisper model (`faster-whisper`), and pushes the spoken word index back to the browser so the prompter scrolls **word-for-word in sync** with what you say.
 
 Everything runs on your local machine—no cloud APIs, no accounts, and no speech/data sent anywhere.
+
+---
+
+## 📢 What's New in v1.1.0
+
+- **Multi-Format Audio Export**: Save audio sessions directly as **MP3** (`.mp3` @ 192 kbps), **WAV** (`.wav` lossless 16-bit PCM), or **WebM** (`.webm`).
+- **MP4 & WebM Video Export**: Save video recordings directly in universal **MP4** (`.mp4`) format or lightweight **WebM** (`.webm`).
+- **Dynamic Format Selector**: Intuitive dropdown in the Recording panel automatically adapts based on chosen record mode (*Video & Audio* vs *Audio Only*).
+- **100% Local & Offline**: Audio conversions and MP3 encoding run completely client-side with embedded encoders.
+- See full notes in [CHANGELOG.md](file:///Users/philkershaw/Documents/work/Tools/teleprompter/CHANGELOG.md) or the [Releases Page](https://github.com/jibberish666/Teleprompter/releases).
 
 ---
 
