@@ -29,6 +29,10 @@
   const videoElem = document.getElementById('camera-feed');
   const transcriptInput = document.getElementById('transcript-input');
   const fileInput = document.getElementById('file-input');
+  const btnAutoFormat = document.getElementById('btn-auto-format');
+  const btnAutoFormatText = document.getElementById('btn-auto-format-text');
+  const optAutoFormatOnPaste = document.getElementById('opt-auto-format-on-paste');
+  const formatToast = document.getElementById('format-toast');
   const linesContainer = document.getElementById('lines-container');
   const scrollingContent = document.getElementById('scrolling-content');
   const prompterBox = document.getElementById('prompter-box');
@@ -41,6 +45,26 @@
   const recIndicator = document.getElementById('rec-indicator');
   const vuBar = document.getElementById('vu-bar');
   const vuText = document.getElementById('vu-text');
+
+  let autoFormatOnPaste = localStorage.getItem('teleprompter_auto_format_paste') !== 'false';
+  if (optAutoFormatOnPaste) {
+    optAutoFormatOnPaste.checked = autoFormatOnPaste;
+    optAutoFormatOnPaste.addEventListener('change', (e) => {
+      autoFormatOnPaste = e.target.checked;
+      localStorage.setItem('teleprompter_auto_format_paste', String(autoFormatOnPaste));
+    });
+  }
+
+  function showFormatToast(msg = 'Formatted ✓') {
+    if (!formatToast) return;
+    formatToast.textContent = msg;
+    formatToast.classList.remove('opacity-0');
+    formatToast.classList.add('opacity-100');
+    setTimeout(() => {
+      formatToast.classList.remove('opacity-100');
+      formatToast.classList.add('opacity-0');
+    }, 2000);
+  }
 
   const optOpacity = document.getElementById('opt-opacity');
   const optFontsize = document.getElementById('opt-fontsize');
@@ -688,18 +712,318 @@
     scrollingContent.style.paddingTop = (activeLineOffset * lineH) + 'px';
   }
 
+  // ---- Automatic Teleprompter Script Phrasing & Formatting -----------------
+  function formatScriptForPrompter(text) {
+    if (!text || !text.trim()) return '';
+
+    const PREPOSITIONS = new Set([
+      'in', 'on', 'at', 'to', 'for', 'with', 'by', 'from', 'of', 'into',
+      'through', 'across', 'about', 'as', 'over', 'under', 'between'
+    ]);
+
+    const CONJUNCTIONS = new Set(['and', 'or', 'but', 'nor', 'so', 'yet']);
+
+    const COMMON_VERBS = new Set([
+      'combines', 'combine', 'features', 'feature', 'delivers', 'deliver',
+      'includes', 'include', 'provides', 'provide', 'supports', 'support',
+      'offers', 'offer', 'enables', 'enable', 'allows', 'allow', 'ensures',
+      'ensure', 'uses', 'use', 'improves', 'improve', 'contains', 'contain',
+      'requires', 'require', 'creates', 'create', 'works', 'work'
+    ]);
+
+    const ARTICLES_AND_PRONOUNS = new Set([
+      'a', 'an', 'the', 'this', 'that', 'these', 'those', 'my', 'your', 'his',
+      'her', 'its', 'our', 'their', 'which', 'who', 'whom', 'whose', 'it', 'we',
+      'you', 'they', 'he', 'she'
+    ]);
+
+    // Key compound technical terms and noun phrases that must remain intact
+    const PROTECTED_TERMS = [
+      'variable geometry turbochargers',
+      'proven flow measurement technology',
+      'flow measurement technology',
+      'passenger car and light commercial vehicle applications',
+      'light commercial vehicle applications',
+      'light commercial vehicles',
+      'enhanced actuator control',
+      'actuator control',
+      'aftermarket repair',
+      'Turbo Technics VTR100 EVO',
+      'VTR100 EVO'
+    ];
+
+    // Clean raw paragraphs (preserve deliberate empty lines)
+    const rawParagraphs = text.split(/\r?\n\s*\r?\n/);
+    const formattedSections = [];
+
+    for (const para of rawParagraphs) {
+      const trimmedPara = para.trim();
+      if (!trimmedPara) continue;
+
+      // Split on full sentence boundaries (. ! ? ;)
+      const sentenceRegex = /([.!?]+)(?:\s+|$)/g;
+      const sentences = [];
+      let lastIndex = 0;
+      let match;
+
+      while ((match = sentenceRegex.exec(trimmedPara)) !== null) {
+        const sentenceText = trimmedPara.slice(lastIndex, match.index + match[1].length).trim();
+        if (sentenceText) sentences.push(sentenceText);
+        lastIndex = match.index + match[0].length;
+      }
+      if (lastIndex < trimmedPara.length) {
+        const rem = trimmedPara.slice(lastIndex).trim();
+        if (rem) sentences.push(rem);
+      }
+
+      const paraOutputLines = [];
+
+      for (let sIdx = 0; sIdx < sentences.length; sIdx++) {
+        const sentence = sentences[sIdx];
+        const sentenceLines = formatSentence(sentence);
+
+        if (paraOutputLines.length > 0 && sentenceLines.length > 0) {
+          // Breath pause line between distinct sentences
+          paraOutputLines.push('');
+        }
+
+        paraOutputLines.push(...sentenceLines);
+      }
+
+      formattedSections.push(paraOutputLines.join('\n'));
+    }
+
+    return formattedSections.join('\n\n');
+
+    function formatSentence(sentence) {
+      const rawWords = sentence.split(/\s+/).filter(Boolean);
+      if (rawWords.length <= 8) {
+        return [rawWords.join(' ')];
+      }
+
+      // Step 1: Tokenize & identify protected noun phrases / technical terms
+      const units = [];
+      let i = 0;
+
+      while (i < rawWords.length) {
+        // 1. Check known multi-word protected terms
+        let matchedPhrase = null;
+        for (const phrase of PROTECTED_TERMS) {
+          const pWords = phrase.split(' ');
+          if (i + pWords.length <= rawWords.length) {
+            let matches = true;
+            for (let p = 0; p < pWords.length; p++) {
+              const wClean = rawWords[i + p].toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
+              if (wClean !== pWords[p].toLowerCase()) {
+                matches = false;
+                break;
+              }
+            }
+            if (matches) {
+              if (!matchedPhrase || pWords.length > matchedPhrase.length) {
+                matchedPhrase = pWords;
+              }
+            }
+          }
+        }
+
+        if (matchedPhrase) {
+          const slice = rawWords.slice(i, i + matchedPhrase.length);
+          const last = slice[slice.length - 1];
+          units.push({
+            text: slice.join(' '),
+            words: slice,
+            wordCount: slice.length,
+            isProtected: true,
+            forceOwnLine: slice.length >= 3,
+            hasComma: last.endsWith(',') || last.endsWith(';') || last.endsWith(':')
+          });
+          i += matchedPhrase.length;
+          continue;
+        }
+
+        // 2. Dynamic compound noun / technical phrase identification (2-4 content words)
+        const w = rawWords[i];
+        const cleanW = w.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
+        const isFuncOrVerb = PREPOSITIONS.has(cleanW) || CONJUNCTIONS.has(cleanW) ||
+          ARTICLES_AND_PRONOUNS.has(cleanW) || COMMON_VERBS.has(cleanW);
+
+        if (!isFuncOrVerb && !w.endsWith(',') && !w.endsWith(';') && i + 1 < rawWords.length) {
+          const nextW = rawWords[i + 1];
+          const nextClean = nextW.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
+          const nextIsFuncOrVerb = PREPOSITIONS.has(nextClean) || CONJUNCTIONS.has(nextClean) ||
+            ARTICLES_AND_PRONOUNS.has(nextClean) || COMMON_VERBS.has(nextClean);
+
+          if (!nextIsFuncOrVerb) {
+            const compSlice = [w, nextW];
+            let k = i + 2;
+            while (k < rawWords.length && (k - i) < 4) {
+              const extraW = rawWords[k];
+              const extraClean = extraW.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
+              if (PREPOSITIONS.has(extraClean) || CONJUNCTIONS.has(extraClean) ||
+                  ARTICLES_AND_PRONOUNS.has(extraClean) || COMMON_VERBS.has(extraClean)) break;
+              compSlice.push(extraW);
+              k++;
+              if (extraW.endsWith(',') || extraW.endsWith(';')) break;
+            }
+
+            const last = compSlice[compSlice.length - 1];
+            units.push({
+              text: compSlice.join(' '),
+              words: compSlice,
+              wordCount: compSlice.length,
+              isProtected: true,
+              forceOwnLine: compSlice.length >= 3,
+              hasComma: last.endsWith(',') || last.endsWith(';') || last.endsWith(':')
+            });
+            i = k;
+            continue;
+          }
+        }
+
+        // Single word unit
+        units.push({
+          text: w,
+          words: [w],
+          wordCount: 1,
+          isProtected: false,
+          forceOwnLine: false,
+          hasComma: w.endsWith(',') || w.endsWith(';') || w.endsWith(':')
+        });
+        i++;
+      }
+
+      // Step 2: Build rhythmic lines (target 5-8 words max)
+      const lines = [];
+      let currentWords = [];
+      let wordsSinceBreath = 0;
+
+      function flushCurrentLine(addBreath = false) {
+        if (currentWords.length === 0) return;
+        lines.push(currentWords.join(' '));
+        wordsSinceBreath += currentWords.length;
+        if (addBreath && wordsSinceBreath >= 8) {
+          lines.push(''); // Breath pause line
+          wordsSinceBreath = 0;
+        }
+        currentWords = [];
+      }
+
+      for (let u = 0; u < units.length; u++) {
+        const unit = units[u];
+        const unitFirstClean = unit.words[0].toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
+        const isPrepOrConj = PREPOSITIONS.has(unitFirstClean) || CONJUNCTIONS.has(unitFirstClean);
+
+        const wouldExceed = (currentWords.length + unit.wordCount) > 8;
+
+        const shouldBreakBefore = currentWords.length > 0 && (
+          wouldExceed ||
+          unit.forceOwnLine ||
+          (currentWords.length >= 4 && isPrepOrConj)
+        );
+
+        if (shouldBreakBefore) {
+          flushCurrentLine(false);
+        }
+
+        currentWords.push(...unit.words);
+
+        if (unit.hasComma) {
+          const isMajorClause = currentWords.length >= 7 || wordsSinceBreath >= 12;
+          flushCurrentLine(isMajorClause);
+        } else if (currentWords.length >= 8 || unit.forceOwnLine) {
+          flushCurrentLine(false);
+        }
+      }
+
+      flushCurrentLine(false);
+
+      // Step 3: Polish lines
+      // 1) Forward-merge short lead-in lines (<= 2 words starting with preposition/article/conjunction)
+      const forwardMerged = [];
+      for (let l = 0; l < lines.length; l++) {
+        const line = lines[l];
+        if (line === '') {
+          forwardMerged.push('');
+          continue;
+        }
+        const lWords = line.split(/\s+/).filter(Boolean);
+        const firstClean = lWords[0].toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
+        const isLeadIn = PREPOSITIONS.has(firstClean) || CONJUNCTIONS.has(firstClean) || ARTICLES_AND_PRONOUNS.has(firstClean);
+
+        if (lWords.length <= 2 && isLeadIn && l < lines.length - 1 && lines[l + 1] !== '') {
+          const nextWords = lines[l + 1].split(/\s+/).filter(Boolean);
+          if (lWords.length + nextWords.length <= 8) {
+            lines[l + 1] = `${line} ${lines[l + 1]}`;
+            continue;
+          }
+        }
+        forwardMerged.push(line);
+      }
+
+      // 2) Backward-merge short trailing fragments if appropriate
+      const result = [];
+      for (let l = 0; l < forwardMerged.length; l++) {
+        const line = forwardMerged[l];
+        if (line === '') {
+          result.push('');
+          continue;
+        }
+        const lWords = line.split(/\s+/).filter(Boolean);
+        if (lWords.length <= 2 && result.length > 0) {
+          const prev = result[result.length - 1];
+          if (prev !== '') {
+            const prevWords = prev.split(/\s+/).filter(Boolean);
+            if (prevWords.length + lWords.length <= 8) {
+              result[result.length - 1] = `${prev} ${line}`;
+              continue;
+            }
+          }
+        }
+        result.push(line);
+      }
+
+      return result;
+    }
+  }
+
+  // ---- Auto-Format button & Paste handling -----------------------------------
+  if (btnAutoFormat) {
+    btnAutoFormat.addEventListener('click', () => {
+      if (!transcriptInput.value || !transcriptInput.value.trim()) return;
+      const formatted = formatScriptForPrompter(transcriptInput.value);
+      transcriptInput.value = formatted;
+      parseAndRenderTranscript();
+      updateStartButton();
+      showFormatToast('Formatted ✓');
+    });
+  }
+
+  transcriptInput.addEventListener('paste', () => {
+    if (!autoFormatOnPaste) return;
+    setTimeout(() => {
+      if (!transcriptInput.value.trim()) return;
+      const formatted = formatScriptForPrompter(transcriptInput.value);
+      transcriptInput.value = formatted;
+      parseAndRenderTranscript();
+      updateStartButton();
+      showFormatToast('Auto-formatted ✓');
+    }, 50);
+  });
+
   // ---- File upload ----------------------------------------------------------
   fileInput.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const name = file.name.toLowerCase();
     try {
+      let rawText = '';
       if (name.endsWith('.txt') || name.endsWith('.md')) {
-        transcriptInput.value = await file.text();
+        rawText = await file.text();
       } else if (name.endsWith('.docx')) {
         const buffer = await file.arrayBuffer();
         const res = await mammoth.extractRawText({ arrayBuffer: buffer });
-        transcriptInput.value = res.value;
+        rawText = res.value;
       } else if (name.endsWith('.pdf')) {
         const buffer = await file.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
@@ -709,11 +1033,19 @@
           const content = await page.getTextContent();
           text += content.items.map((it) => it.str).join(' ') + '\n';
         }
-        transcriptInput.value = text;
+        rawText = text;
       } else {
         return;
       }
+
+      if (autoFormatOnPaste) {
+        transcriptInput.value = formatScriptForPrompter(rawText);
+        showFormatToast('Auto-formatted file ✓');
+      } else {
+        transcriptInput.value = rawText;
+      }
       parseAndRenderTranscript();
+      updateStartButton();
     } catch (err) {
       alert('Could not read file: ' + err.message);
     }
@@ -736,20 +1068,27 @@
       return;
     }
 
-    const WORDS_PER_LINE = 8;
     linesData = [];
     allWords = [];
     let globalWordIdx = 0;
 
+    // Check if input consists of continuous long paragraphs with lines exceeding 8 words
+    // If so, automatically format for optimal teleprompter phrasing
+    const inputLines = rawText.split(/\r\n|\r|\n/).map((s) => s.trim()).filter(Boolean);
+    const hasUnbrokenLongLines = inputLines.some((l) => l.split(/\s+/).length > 8);
+    const effectiveText = (inputLines.length <= 3 && hasUnbrokenLongLines)
+      ? formatScriptForPrompter(rawText)
+      : rawText;
+
     // Split input by newlines to respect carriage returns / paragraph / section breaks
-    const rawLines = rawText.split(/\r\n|\r|\n/);
+    const rawLines = effectiveText.split(/\r\n|\r|\n/);
     let prevWasBlank = false;
 
     for (let l = 0; l < rawLines.length; l++) {
       const trimmedLine = rawLines[l].trim();
 
       if (!trimmedLine) {
-        // Blank line: represents a paragraph or section break
+        // Blank line: represents a breath pause or section break
         if (!prevWasBlank && linesData.length > 0) {
           linesData.push({ lineIdx: linesData.length, words: [], isBlank: true });
           prevWasBlank = true;
@@ -761,11 +1100,16 @@
       const lineWords = trimmedLine.split(/\s+/).filter(Boolean);
       if (lineWords.length === 0) continue;
 
-      // Wrap long single lines into chunks of WORDS_PER_LINE
-      for (let i = 0; i < lineWords.length; i += WORDS_PER_LINE) {
-        const lineChunk = lineWords.slice(i, i + WORDS_PER_LINE);
+      // If a line is still over 8 words, format it with rhythmic phrasing
+      const lineChunks = lineWords.length > 8
+        ? formatScriptForPrompter(trimmedLine).split(/\r\n|\r|\n/).map((s) => s.trim()).filter(Boolean)
+        : [trimmedLine];
+
+      for (const chunk of lineChunks) {
+        const chunkWords = chunk.split(/\s+/).filter(Boolean);
+        if (chunkWords.length === 0) continue;
         const lineObj = { lineIdx: linesData.length, words: [], isBlank: false };
-        lineChunk.forEach((wordStr) => {
+        chunkWords.forEach((wordStr) => {
           const wObj = { globalIdx: globalWordIdx, lineIdx: lineObj.lineIdx, original: wordStr };
           lineObj.words.push(wObj);
           allWords.push(wObj);
