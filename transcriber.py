@@ -61,6 +61,7 @@ class Transcriber:
         on_sync=None,
         on_status=None,
         on_error=None,
+        on_fumble=None,
     ):
         self.profile = profile if profile in ENGINE_PROFILES else "fast"
         prof = ENGINE_PROFILES[self.profile]
@@ -78,9 +79,11 @@ class Transcriber:
         self.on_sync = on_sync
         self.on_status = on_status
         self.on_error = on_error
+        self.on_fumble = on_fumble
 
         self.model = None
         self.aligner = None
+        self.is_rehearsal = False
         self.committed_abs_end = 0.0
         self.silent_ticks = 0
         # Small tail overlap: words ending within this margin of the live edge
@@ -191,13 +194,14 @@ class Transcriber:
         self.loop_thread = threading.Thread(target=self._loop, daemon=True)
         self.loop_thread.start()
 
-    def begin(self, words):
+    def begin(self, words, is_rehearsal=False):
         """Begin a session: reset aligner + committed anchor, run detection."""
         self.aligner = aligner.Aligner(
             words,
             window=self.align_window,
             tolerance=self.align_tolerance,
         )
+        self.is_rehearsal = bool(is_rehearsal)
         self.committed_abs_end = 0.0
         self.silent_ticks = 0
         self.audio.reset()
@@ -293,3 +297,6 @@ class Transcriber:
         if matched and self.on_sync:
             for idx in matched:
                 self.on_sync(idx)
+
+        if self.aligner.has_new_fumbles and self.on_fumble:
+            self.on_fumble(self.aligner.get_new_fumbles())

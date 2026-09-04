@@ -33,6 +33,10 @@
     <div class="flex items-center gap-2">
       <button id="btn-toggle-panel" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-xs rounded border border-gray-700">Script & Options</button>
       <button id="btn-reset" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-xs rounded border border-gray-700 transition" title="Rewind to start of script without clearing text">Restart Script</button>
+      <button id="btn-rehearse" class="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold rounded shadow transition flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-emerald-700 cursor-pointer" disabled title="Trial read-through to catch fumbles without saving recordings">
+        <svg class="w-3.5 h-3.5 text-emerald-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z"/></svg>
+        <span>Rehearse</span>
+      </button>
       <button id="btn-start" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded shadow transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-indigo-600" disabled>Start Session</button>
       <button id="btn-stop" class="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded shadow hidden transition">Stop & Save Video</button>
     </div>
@@ -52,12 +56,21 @@
         </div>
         <input type="file" id="file-input" accept=".txt,.md,.docx,.pdf" class="block w-full text-[10px] text-gray-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-gray-800 file:text-gray-300 hover:file:bg-gray-700 mb-2 cursor-pointer"/>
         <textarea id="transcript-input" rows="7" placeholder="Paste your script here (paragraphs & line breaks are preserved)..." class="w-full bg-gray-950 border border-gray-800 rounded p-2 text-xs text-gray-200 focus:outline-none focus:border-indigo-500 leading-relaxed font-sans"></textarea>
-        <div class="flex items-center justify-between mt-1 text-[11px] text-gray-400">
-          <label class="flex items-center gap-1.5 cursor-pointer select-none">
-            <input type="checkbox" id="opt-auto-format-on-paste" class="rounded bg-gray-800 border-gray-700 text-indigo-500 focus:ring-0 w-3.5 h-3.5 cursor-pointer" checked>
-            <span>Auto-format on paste / import</span>
-          </label>
-          <span id="format-toast" class="text-[10px] font-medium text-green-400 opacity-0 transition-opacity duration-300">Formatted ✓</span>
+        <div class="space-y-1.5 mt-1.5 text-[11px] text-gray-400">
+          <div class="flex items-center justify-between">
+            <label class="flex items-center gap-1.5 cursor-pointer select-none">
+              <input type="checkbox" id="opt-auto-format-on-paste" class="rounded bg-gray-800 border-gray-700 text-indigo-500 focus:ring-0 w-3.5 h-3.5 cursor-pointer" checked>
+              <span>Auto-format on paste / import</span>
+            </label>
+            <span id="format-toast" class="text-[10px] font-medium text-green-400 opacity-0 transition-opacity duration-300">Formatted ✓</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <label class="flex items-center gap-1.5 cursor-pointer select-none" title="Save transcript text in browser storage across refreshes">
+              <input type="checkbox" id="opt-persist-transcript" class="rounded bg-gray-800 border-gray-700 text-indigo-500 focus:ring-0 w-3.5 h-3.5 cursor-pointer" checked>
+              <span>Persist script between refreshes</span>
+            </label>
+            <button id="btn-clear-transcript" type="button" class="text-[10px] text-gray-500 hover:text-red-400 transition cursor-pointer hidden" title="Clear script text">Clear</button>
+          </div>
         </div>
       </div>
 
@@ -87,7 +100,7 @@
 
         <div>
           <label class="flex justify-between text-gray-400">Visible Lines <span id="val-lines" class="text-indigo-400 font-bold">7</span></label>
-          <input type="range" id="opt-lines" min="2" max="8" step="1" value="7" class="w-full">
+          <input type="range" id="opt-lines" min="2" max="12" step="1" value="7" class="w-full">
         </div>
 
         <div>
@@ -120,7 +133,7 @@
 
           <div class="flex justify-between items-center mb-2">
             <label for="opt-camera-toggle" class="text-gray-400">Camera On</label>
-            <input type="checkbox" id="opt-camera-toggle" checked class="rounded bg-gray-800 border-gray-700">
+            <input type="checkbox" id="opt-camera-toggle" class="rounded bg-gray-800 border-gray-700">
           </div>
 
           <div>
@@ -144,6 +157,17 @@
             </select>
             <div id="engine-desc" class="text-[10px] text-gray-400 mt-1.5 leading-snug">0.6s interval, base.en model (fast + accurate)</div>
           </div>
+        </div>
+
+        <div class="border-t border-gray-800 pt-3 mt-1">
+          <div class="font-bold text-gray-300 text-xs uppercase tracking-wider mb-2 flex items-center justify-between">
+            <span>Pronunciation Cues</span>
+            <span id="difficult-count-badge" class="text-[10px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 font-mono border border-amber-700/50">0 words</span>
+          </div>
+          <button id="btn-open-difficult-words" type="button" class="w-full py-1.5 px-3 bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 hover:text-amber-200 border border-amber-600/40 rounded text-xs font-medium flex items-center justify-center gap-1.5 transition shadow-sm cursor-pointer">
+            <svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            <span>Difficult Words & Colors…</span>
+          </button>
         </div>
 
         <div class="border-t border-gray-800 pt-3 mt-1 space-y-2">
@@ -171,7 +195,7 @@
 
     <div class="flex-1 bg-black relative flex justify-center items-center overflow-hidden">
 
-      <video id="camera-feed" autoplay playsinline muted class="absolute inset-0 w-full h-full object-cover"></video>
+      <video id="camera-feed" autoplay playsinline muted class="absolute inset-0 w-full h-full object-cover hidden"></video>
 
       <div id="prompter-box" class="absolute top-10 inset-x-4 max-w-[800px] mx-auto bg-gray-900/90 border border-gray-700/80 rounded-xl shadow-2xl backdrop-blur-md p-4 transition-all z-30 pointer-events-auto">
 
@@ -196,6 +220,159 @@
 
     </div>
 
+  </div>
+
+  <!-- Difficult Words Modal -->
+  <div id="modal-difficult-words" class="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm hidden transition-opacity duration-200">
+    <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden flex flex-col max-h-[90vh] text-gray-200">
+      
+      <!-- Header -->
+      <div class="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-950/70">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-400">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold text-white">Difficult Words & Custom Highlight</h3>
+            <p class="text-[11px] text-gray-400">Cue stumble-prone words with configurable highlight colors on screen</p>
+          </div>
+        </div>
+        <button id="btn-close-difficult-words" type="button" class="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800 transition cursor-pointer">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <!-- Body -->
+      <div class="p-5 space-y-4 overflow-y-auto text-xs">
+        
+        <!-- Word Input Section -->
+        <div class="space-y-2">
+          <label class="block font-semibold text-gray-300 uppercase tracking-wider text-[11px]">Add Difficult Words</label>
+          <div class="flex gap-2">
+            <input type="text" id="input-difficult-word" placeholder="Type a word (e.g. turbocharger) & press Enter..." class="flex-1 bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 placeholder-gray-500">
+            <button id="btn-add-difficult-word" type="button" class="px-3.5 py-2 bg-amber-600 hover:bg-amber-500 text-white font-medium rounded-lg text-xs transition shadow cursor-pointer">Add</button>
+          </div>
+          <div class="text-[10px] text-gray-400 flex justify-between">
+            <span>Case-insensitive. Punctuation is handled automatically.</span>
+            <button id="btn-toggle-batch-words" type="button" class="text-indigo-400 hover:text-indigo-300 underline cursor-pointer">Paste word list</button>
+          </div>
+          <div id="batch-words-container" class="hidden mt-2 space-y-1.5">
+            <textarea id="textarea-batch-words" rows="3" placeholder="Paste words separated by commas, spaces, or newlines..." class="w-full bg-gray-950 border border-gray-700 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-amber-500"></textarea>
+            <div class="flex justify-end gap-2">
+              <button id="btn-import-batch-words" type="button" class="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[11px] font-medium transition cursor-pointer">Import Words</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tag Chips Container -->
+        <div class="space-y-1.5 bg-gray-950/70 p-3 rounded-xl border border-gray-800">
+          <div class="flex justify-between items-center text-[11px]">
+            <span class="text-gray-300 font-medium">Configured Difficult Words (<span id="difficult-words-count">0</span>)</span>
+            <button id="btn-clear-difficult-words" type="button" class="text-red-400 hover:text-red-300 text-[10px] hover:underline cursor-pointer">Clear all</button>
+          </div>
+          <div id="difficult-tags-list" class="flex flex-wrap gap-1.5 min-h-[44px] max-h-32 overflow-y-auto p-1 items-center">
+            <span class="text-gray-500 italic text-[11px]">No difficult words added yet. Type a word above.</span>
+          </div>
+        </div>
+
+        <!-- Trial Rehearsal Fumbles Container -->
+        <div class="space-y-1.5 bg-gray-950/70 p-3 rounded-xl border border-gray-800">
+          <div class="flex justify-between items-center text-[11px]">
+            <span class="text-emerald-400 font-medium flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z"/></svg>
+              <span>Trial Rehearsal Fumbles (<span id="rehearsal-words-count">0</span>)</span>
+            </span>
+            <button id="btn-clear-rehearsal-words" type="button" class="text-red-400 hover:text-red-300 text-[10px] hover:underline cursor-pointer">Clear rehearsal fumbles</button>
+          </div>
+          <div class="text-[10px] text-gray-400">Caught during trial run (skipped, stumbled, or repeated). Click × to clear specific words.</div>
+          
+          <!-- Filter Buttons for Tag Types -->
+          <div class="flex flex-wrap items-center justify-between gap-1.5 pt-1 pb-1">
+            <div class="flex items-center gap-1.5" id="rehearsal-filter-group" role="tablist" aria-label="Filter fumbles by tag type">
+              <button type="button" data-filter="all" class="rehearsal-filter-btn active" title="Show all fumbles">
+                All <span class="rehearsal-filter-count" id="filter-count-all">0</span>
+              </button>
+              <button type="button" data-filter="skipped" class="rehearsal-filter-btn" title="Filter by Skipped">
+                <span class="w-1.5 h-1.5 rounded-full bg-red-400 inline-block"></span>
+                Skipped <span class="rehearsal-filter-count" id="filter-count-skipped">0</span>
+              </button>
+              <button type="button" data-filter="stumbled" class="rehearsal-filter-btn" title="Filter by Stumbled">
+                <span class="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block"></span>
+                Stumbled <span class="rehearsal-filter-count" id="filter-count-stumbled">0</span>
+              </button>
+              <button type="button" data-filter="repeated" class="rehearsal-filter-btn" title="Filter by Repeated">
+                <span class="w-1.5 h-1.5 rounded-full bg-purple-400 inline-block"></span>
+                Repeated <span class="rehearsal-filter-count" id="filter-count-repeated">0</span>
+              </button>
+            </div>
+            <label class="flex items-center gap-1.5 text-[10px] text-gray-400 hover:text-gray-300 cursor-pointer select-none" title="When checked, prompter text only underlines fumbles matching the active filter">
+              <input type="checkbox" id="checkbox-filter-prompter" class="rounded border-gray-700 text-emerald-500 focus:ring-0 bg-gray-900 w-3 h-3 cursor-pointer">
+              <span>Sync with prompter</span>
+            </label>
+          </div>
+
+          <div id="rehearsal-tags-list" class="flex flex-wrap gap-1.5 min-h-[44px] max-h-36 overflow-y-auto p-1 items-center">
+            <span class="text-gray-500 italic text-[11px]">No trial fumbles detected yet. Run "Rehearse" to trial-test your script.</span>
+          </div>
+        </div>
+
+        <!-- Highlight Color Customization -->
+        <div class="space-y-2 border-t border-gray-800 pt-3">
+          <label class="block font-semibold text-gray-300 uppercase tracking-wider text-[11px]">Highlight Color</label>
+          <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2 flex-wrap flex-1" id="color-swatches-container">
+              <button type="button" data-color="#f59e0b" class="color-swatch w-7 h-7 rounded-full border-2 transition transform hover:scale-110 cursor-pointer shadow" style="background-color: #f59e0b;" title="Amber"></button>
+              <button type="button" data-color="#f43f5e" class="color-swatch w-7 h-7 rounded-full border-2 transition transform hover:scale-110 cursor-pointer shadow" style="background-color: #f43f5e;" title="Coral / Rose"></button>
+              <button type="button" data-color="#10b981" class="color-swatch w-7 h-7 rounded-full border-2 transition transform hover:scale-110 cursor-pointer shadow" style="background-color: #10b981;" title="Emerald"></button>
+              <button type="button" data-color="#06b6d4" class="color-swatch w-7 h-7 rounded-full border-2 transition transform hover:scale-110 cursor-pointer shadow" style="background-color: #06b6d4;" title="Cyan"></button>
+              <button type="button" data-color="#d946ef" class="color-swatch w-7 h-7 rounded-full border-2 transition transform hover:scale-110 cursor-pointer shadow" style="background-color: #d946ef;" title="Fuchsia / Purple"></button>
+              <button type="button" data-color="#eab308" class="color-swatch w-7 h-7 rounded-full border-2 transition transform hover:scale-110 cursor-pointer shadow" style="background-color: #eab308;" title="Gold"></button>
+            </div>
+            <div class="flex items-center gap-2 pl-3 border-l border-gray-800">
+              <label for="picker-difficult-color" class="text-[11px] text-gray-400">Custom:</label>
+              <input type="color" id="picker-difficult-color" value="#f59e0b" class="w-8 h-8 rounded border border-gray-700 bg-transparent cursor-pointer">
+            </div>
+          </div>
+        </div>
+
+        <!-- Highlight Treatment Style -->
+        <div class="space-y-2 border-t border-gray-800 pt-3">
+          <label class="block font-semibold text-gray-300 uppercase tracking-wider text-[11px]">Highlight Treatment</label>
+          <div class="grid grid-cols-3 gap-2">
+            <label class="flex items-center gap-2 p-2.5 rounded-lg bg-gray-950 border border-gray-800 hover:border-gray-700 cursor-pointer text-[11px]">
+              <input type="radio" name="difficult-style" value="pill" class="text-amber-500 focus:ring-0" checked>
+              <span>Filled Pill</span>
+            </label>
+            <label class="flex items-center gap-2 p-2.5 rounded-lg bg-gray-950 border border-gray-800 hover:border-gray-700 cursor-pointer text-[11px]">
+              <input type="radio" name="difficult-style" value="glow" class="text-amber-500 focus:ring-0">
+              <span>Text Glow</span>
+            </label>
+            <label class="flex items-center gap-2 p-2.5 rounded-lg bg-gray-950 border border-gray-800 hover:border-gray-700 cursor-pointer text-[11px]">
+              <input type="radio" name="difficult-style" value="underline" class="text-amber-500 focus:ring-0">
+              <span>Underline Accent</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Live Preview -->
+        <div class="space-y-1.5 border-t border-gray-800 pt-3">
+          <label class="block font-semibold text-gray-400 uppercase tracking-wider text-[10px]">Live Teleprompter Preview</label>
+          <div class="bg-gray-950 p-3.5 rounded-xl border border-gray-800 text-sm font-medium text-white flex items-center justify-start gap-1.5">
+            <span class="opacity-55">Testing our</span>
+            <span id="difficult-word-preview" class="prompter-word prompter-word-difficult style-pill">turbocharger</span>
+            <span class="opacity-55">flow technology</span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Footer -->
+      <div class="p-4 border-t border-gray-800 flex justify-between items-center bg-gray-950/70">
+        <span id="difficult-modal-status" class="text-[11px] text-green-400 opacity-0 transition-opacity">Saved & Applied ✓</span>
+        <button id="btn-save-difficult-words" type="button" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg text-xs transition shadow cursor-pointer">Done</button>
+      </div>
+
+    </div>
   </div>
 
   <script src="/static/app.js"></script>

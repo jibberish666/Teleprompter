@@ -9,6 +9,7 @@
   let audioContext = null;
   let analyser = null;
   let isPrompting = false;
+  let isRehearsal = false;
 
   // Transcript state
   let linesData = [];
@@ -32,10 +33,13 @@
   const btnAutoFormat = document.getElementById('btn-auto-format');
   const btnAutoFormatText = document.getElementById('btn-auto-format-text');
   const optAutoFormatOnPaste = document.getElementById('opt-auto-format-on-paste');
+  const optPersistTranscript = document.getElementById('opt-persist-transcript');
+  const btnClearTranscript = document.getElementById('btn-clear-transcript');
   const formatToast = document.getElementById('format-toast');
   const linesContainer = document.getElementById('lines-container');
   const scrollingContent = document.getElementById('scrolling-content');
   const prompterBox = document.getElementById('prompter-box');
+  const btnRehearse = document.getElementById('btn-rehearse');
   const btnStart = document.getElementById('btn-start');
   const btnStop = document.getElementById('btn-stop');
   const btnReset = document.getElementById('btn-reset');
@@ -54,6 +58,67 @@
       localStorage.setItem('teleprompter_auto_format_paste', String(autoFormatOnPaste));
     });
   }
+
+  let persistTranscript = localStorage.getItem('teleprompter_persist_transcript') !== 'false';
+  if (optPersistTranscript) {
+    optPersistTranscript.checked = persistTranscript;
+    optPersistTranscript.addEventListener('change', (e) => {
+      persistTranscript = e.target.checked;
+      localStorage.setItem('teleprompter_persist_transcript', String(persistTranscript));
+      if (persistTranscript) {
+        if (transcriptInput && transcriptInput.value) {
+          localStorage.setItem('teleprompter_saved_transcript', transcriptInput.value);
+        }
+        showFormatToast('Persistence enabled ✓');
+      } else {
+        localStorage.removeItem('teleprompter_saved_transcript');
+        showFormatToast('Persistence disabled');
+      }
+    });
+  }
+
+  function saveTranscriptIfEnabled() {
+    if (persistTranscript) {
+      if (transcriptInput && transcriptInput.value && transcriptInput.value.trim()) {
+        localStorage.setItem('teleprompter_saved_transcript', transcriptInput.value);
+      } else {
+        localStorage.removeItem('teleprompter_saved_transcript');
+      }
+    }
+    updateClearButtonVisibility();
+  }
+
+  function updateClearButtonVisibility() {
+    if (!btnClearTranscript) return;
+    if (transcriptInput && transcriptInput.value && transcriptInput.value.trim().length > 0) {
+      btnClearTranscript.classList.remove('hidden');
+    } else {
+      btnClearTranscript.classList.add('hidden');
+    }
+  }
+
+  if (btnClearTranscript) {
+    btnClearTranscript.addEventListener('click', () => {
+      if (!transcriptInput.value.trim()) return;
+      if (transcriptInput.value.trim().length > 30) {
+        if (!confirm('Are you sure you want to clear the transcript?')) return;
+      }
+      transcriptInput.value = '';
+      if (persistTranscript) {
+        localStorage.removeItem('teleprompter_saved_transcript');
+      }
+      updateClearButtonVisibility();
+      parseAndRenderTranscript();
+      updateStartButton();
+      showFormatToast('Cleared ✓');
+    });
+  }
+
+  window.addEventListener('beforeunload', () => {
+    if (persistTranscript && transcriptInput && transcriptInput.value && transcriptInput.value.trim()) {
+      localStorage.setItem('teleprompter_saved_transcript', transcriptInput.value);
+    }
+  });
 
   function showFormatToast(msg = 'Formatted ✓') {
     if (!formatToast) return;
@@ -123,6 +188,492 @@
       send({ type: 'set_engine', mode: mode });
     });
   }
+
+  // ---- Difficult Words State & Configuration -------------------------------
+  let difficultWordsList = [];
+  try {
+    const savedWords = localStorage.getItem('teleprompter_difficult_words');
+    if (savedWords) difficultWordsList = JSON.parse(savedWords);
+  } catch (_) {
+    difficultWordsList = [];
+  }
+
+  let difficultColor = localStorage.getItem('teleprompter_difficult_color') || '#f59e0b';
+  let difficultStyle = localStorage.getItem('teleprompter_difficult_style') || 'pill';
+
+  let difficultWordsSet = new Set(
+    difficultWordsList.map((w) => w.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '')).filter(Boolean)
+  );
+
+  // ---- Rehearsal / Trial Fumbled Words State ------------------------------
+  let rehearsalWordsList = [];
+  try {
+    const savedRehearsal = localStorage.getItem('teleprompter_rehearsal_words');
+    if (savedRehearsal) rehearsalWordsList = JSON.parse(savedRehearsal);
+  } catch (_) {
+    rehearsalWordsList = [];
+  }
+
+  let rehearsalWordsSet = new Set(
+    rehearsalWordsList.map((item) => (typeof item === 'string' ? item : item.clean || item.word).toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '')).filter(Boolean)
+  );
+
+  let rehearsalFilter = 'all'; // 'all' | 'skipped' | 'stumbled' | 'repeated'
+  let syncPrompterWithFilter = false;
+  try {
+    syncPrompterWithFilter = localStorage.getItem('teleprompter_sync_fumble_filter') === 'true';
+  } catch (_) {}
+
+  function updateCuesCountBadge() {
+    const countBadge = document.getElementById('difficult-count-badge');
+    if (!countBadge) return;
+    const diffCount = difficultWordsList.length;
+    const rehCount = rehearsalWordsList.length;
+    if (diffCount > 0 && rehCount > 0) {
+      countBadge.textContent = `${diffCount} diff · ${rehCount} fumbled`;
+    } else if (rehCount > 0) {
+      countBadge.textContent = `${rehCount} ${rehCount === 1 ? 'fumble' : 'fumbles'}`;
+    } else {
+      countBadge.textContent = `${diffCount} ${diffCount === 1 ? 'word' : 'words'}`;
+    }
+  }
+
+  function saveRehearsalWords() {
+    rehearsalWordsSet = new Set(
+      rehearsalWordsList.map((item) => (typeof item === 'string' ? item : item.clean || item.word).toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '')).filter(Boolean)
+    );
+    localStorage.setItem('teleprompter_rehearsal_words', JSON.stringify(rehearsalWordsList));
+    updateCuesCountBadge();
+  }
+
+  function renderRehearsalTags() {
+    const tagsList = document.getElementById('rehearsal-tags-list');
+    const wordsCount = document.getElementById('rehearsal-words-count');
+    if (wordsCount) wordsCount.textContent = String(rehearsalWordsList.length);
+    updateCuesCountBadge();
+
+    // Compute counts by tag type
+    const counts = { all: rehearsalWordsList.length, skipped: 0, stumbled: 0, repeated: 0 };
+    rehearsalWordsList.forEach((item) => {
+      const r = (typeof item === 'object' && item.reason ? item.reason : 'stumbled').toLowerCase();
+      if (counts[r] !== undefined) counts[r]++;
+      else counts.stumbled++;
+    });
+
+    const countAll = document.getElementById('filter-count-all');
+    const countSkipped = document.getElementById('filter-count-skipped');
+    const countStumbled = document.getElementById('filter-count-stumbled');
+    const countRepeated = document.getElementById('filter-count-repeated');
+    if (countAll) countAll.textContent = String(counts.all);
+    if (countSkipped) countSkipped.textContent = String(counts.skipped);
+    if (countStumbled) countStumbled.textContent = String(counts.stumbled);
+    if (countRepeated) countRepeated.textContent = String(counts.repeated);
+
+    // Update active filter button state
+    document.querySelectorAll('#rehearsal-filter-group .rehearsal-filter-btn').forEach((btn) => {
+      if (btn.getAttribute('data-filter') === rehearsalFilter) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+
+    // Update clear button text and state
+    const btnClearRehearsalWords = document.getElementById('btn-clear-rehearsal-words');
+    if (btnClearRehearsalWords) {
+      if (rehearsalFilter === 'all') {
+        btnClearRehearsalWords.textContent = 'Clear rehearsal fumbles';
+        btnClearRehearsalWords.disabled = rehearsalWordsList.length === 0;
+      } else {
+        const matchCount = counts[rehearsalFilter] || 0;
+        btnClearRehearsalWords.textContent = `Clear ${rehearsalFilter} (${matchCount})`;
+        btnClearRehearsalWords.disabled = matchCount === 0;
+      }
+    }
+
+    if (!tagsList) return;
+    if (rehearsalWordsList.length === 0) {
+      tagsList.innerHTML = '<span class="text-gray-500 italic text-[11px]">No trial fumbles detected yet. Run "Rehearse" to trial-test your script.</span>';
+      return;
+    }
+
+    const indexedList = rehearsalWordsList.map((item, originalIdx) => ({ item, originalIdx }));
+    const filtered = rehearsalFilter === 'all'
+      ? indexedList
+      : indexedList.filter(({ item }) => {
+          const r = (typeof item === 'object' && item.reason ? item.reason : 'stumbled').toLowerCase();
+          return r === rehearsalFilter;
+        });
+
+    if (filtered.length === 0) {
+      tagsList.innerHTML = `<span class="text-gray-500 italic text-[11px]">No ${escapeHtml(rehearsalFilter)} fumbles found.</span>`;
+      return;
+    }
+
+    tagsList.innerHTML = filtered.map(({ item, originalIdx }) => {
+      const word = typeof item === 'string' ? item : (item.word || item.clean);
+      const reason = typeof item === 'object' && item.reason ? item.reason : 'stumbled';
+      const reasonLabel = reason === 'skipped' ? 'Skipped' : reason === 'repeated' ? 'Repeated' : 'Stumbled';
+      const badgeClass = `rehearsal-badge rehearsal-badge-${reason === 'repeated' ? 'repeated' : reason === 'skipped' ? 'skipped' : 'stumbled'}`;
+      return `
+        <span class="rehearsal-tag-chip">
+          <span>${escapeHtml(word)}</span>
+          <span class="${badgeClass}">${reasonLabel}</span>
+          <button type="button" class="keep-btn" data-idx="${originalIdx}" title="Keep permanently as difficult word">+ Keep</button>
+          <button type="button" class="remove-btn" data-idx="${originalIdx}" title="Remove this specific fumble">×</button>
+        </span>
+      `;
+    }).join('');
+  }
+
+  function hexToRgba(hex, alpha) {
+    let c = hex.replace('#', '');
+    if (c.length === 3) c = c.split('').map((x) => x + x).join('');
+    const num = parseInt(c, 16);
+    if (isNaN(num)) return `rgba(245, 158, 11, ${alpha})`;
+    const r = (num >> 16) & 255;
+    const g = (num >> 8) & 255;
+    const b = num & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  function applyDifficultColorStyles() {
+    document.documentElement.style.setProperty('--difficult-color', difficultColor);
+    document.documentElement.style.setProperty('--difficult-bg', hexToRgba(difficultColor, 0.22));
+    document.documentElement.style.setProperty('--difficult-border', hexToRgba(difficultColor, 0.55));
+
+    const previewEl = document.getElementById('difficult-word-preview');
+    if (previewEl) {
+      previewEl.className = `prompter-word prompter-word-difficult style-${difficultStyle}`;
+    }
+
+    const swatches = document.querySelectorAll('.color-swatch');
+    swatches.forEach((sw) => {
+      const col = sw.getAttribute('data-color');
+      if (col && col.toLowerCase() === difficultColor.toLowerCase()) {
+        sw.classList.add('active-swatch');
+      } else {
+        sw.classList.remove('active-swatch');
+      }
+    });
+
+    const picker = document.getElementById('picker-difficult-color');
+    if (picker && picker.value.toLowerCase() !== difficultColor.toLowerCase()) {
+      picker.value = difficultColor;
+    }
+
+    const radios = document.querySelectorAll('input[name="difficult-style"]');
+    radios.forEach((r) => {
+      if (r.value === difficultStyle) r.checked = true;
+    });
+
+    updateCuesCountBadge();
+  }
+
+  function saveDifficultWords() {
+    difficultWordsSet = new Set(
+      difficultWordsList.map((w) => w.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '')).filter(Boolean)
+    );
+    localStorage.setItem('teleprompter_difficult_words', JSON.stringify(difficultWordsList));
+    localStorage.setItem('teleprompter_difficult_color', difficultColor);
+    localStorage.setItem('teleprompter_difficult_style', difficultStyle);
+    updateCuesCountBadge();
+  }
+
+  function showModalStatus(msg = 'Saved & Applied ✓') {
+    const statusEl = document.getElementById('difficult-modal-status');
+    if (!statusEl) return;
+    statusEl.textContent = msg;
+    statusEl.classList.remove('opacity-0');
+    statusEl.classList.add('opacity-100');
+    setTimeout(() => {
+      statusEl.classList.remove('opacity-100');
+      statusEl.classList.add('opacity-0');
+    }, 1800);
+  }
+
+  function renderDifficultTags() {
+    const tagsList = document.getElementById('difficult-tags-list');
+    const wordsCount = document.getElementById('difficult-words-count');
+    if (wordsCount) wordsCount.textContent = String(difficultWordsList.length);
+    updateCuesCountBadge();
+
+    if (!tagsList) return;
+    if (difficultWordsList.length === 0) {
+      tagsList.innerHTML = '<span class="text-gray-500 italic text-[11px]">No difficult words added yet. Type a word above.</span>';
+      return;
+    }
+
+    tagsList.innerHTML = difficultWordsList.map((word, idx) => `
+      <span class="difficult-tag-chip">
+        <span>${escapeHtml(word)}</span>
+        <button type="button" class="remove-btn" data-idx="${idx}" title="Remove word">×</button>
+      </span>
+    `).join('');
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function addDifficultWord(rawWord) {
+    if (!rawWord || !rawWord.trim()) return;
+    const parts = rawWord.split(/[,;\n\r\t]+/).map((s) => s.trim()).filter(Boolean);
+    let added = false;
+    for (const p of parts) {
+      const cleaned = p.replace(/^[^\w]+|[^\w]+$/g, '');
+      if (!cleaned) continue;
+      const lower = cleaned.toLowerCase();
+      if (!difficultWordsList.some((w) => w.toLowerCase() === lower)) {
+        difficultWordsList.push(cleaned);
+        added = true;
+      }
+    }
+    if (added) {
+      saveDifficultWords();
+      renderDifficultTags();
+      parseAndRenderTranscript();
+      showModalStatus('Word added ✓');
+    }
+  }
+
+  // Difficult Words Modal Elements & Events
+  const modalDifficultWords = document.getElementById('modal-difficult-words');
+  const btnOpenDifficultWords = document.getElementById('btn-open-difficult-words');
+  const btnCloseDifficultWords = document.getElementById('btn-close-difficult-words');
+  const btnSaveDifficultWords = document.getElementById('btn-save-difficult-words');
+  const inputDifficultWord = document.getElementById('input-difficult-word');
+  const btnAddDifficultWord = document.getElementById('btn-add-difficult-word');
+  const btnClearDifficultWords = document.getElementById('btn-clear-difficult-words');
+  const btnToggleBatchWords = document.getElementById('btn-toggle-batch-words');
+  const batchWordsContainer = document.getElementById('batch-words-container');
+  const textareaBatchWords = document.getElementById('textarea-batch-words');
+  const btnImportBatchWords = document.getElementById('btn-import-batch-words');
+  const pickerDifficultColor = document.getElementById('picker-difficult-color');
+  const colorSwatchesContainer = document.getElementById('color-swatches-container');
+
+  function openDifficultWordsModal() {
+    if (!modalDifficultWords) return;
+    renderDifficultTags();
+    renderRehearsalTags();
+    applyDifficultColorStyles();
+    modalDifficultWords.classList.remove('hidden');
+    if (inputDifficultWord) {
+      setTimeout(() => inputDifficultWord.focus(), 50);
+    }
+  }
+
+  function closeDifficultWordsModal() {
+    if (!modalDifficultWords) return;
+    modalDifficultWords.classList.add('hidden');
+    if (batchWordsContainer) batchWordsContainer.classList.add('hidden');
+    if (inputDifficultWord) inputDifficultWord.value = '';
+    if (textareaBatchWords) textareaBatchWords.value = '';
+  }
+
+  if (btnOpenDifficultWords) {
+    btnOpenDifficultWords.addEventListener('click', openDifficultWordsModal);
+  }
+  if (btnCloseDifficultWords) {
+    btnCloseDifficultWords.addEventListener('click', closeDifficultWordsModal);
+  }
+  if (btnSaveDifficultWords) {
+    btnSaveDifficultWords.addEventListener('click', () => {
+      if (inputDifficultWord && inputDifficultWord.value.trim()) {
+        addDifficultWord(inputDifficultWord.value.trim());
+        inputDifficultWord.value = '';
+      }
+      closeDifficultWordsModal();
+    });
+  }
+
+  if (modalDifficultWords) {
+    modalDifficultWords.addEventListener('click', (e) => {
+      if (e.target === modalDifficultWords) closeDifficultWordsModal();
+    });
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modalDifficultWords && !modalDifficultWords.classList.contains('hidden')) {
+      closeDifficultWordsModal();
+    }
+  });
+
+  if (btnAddDifficultWord && inputDifficultWord) {
+    btnAddDifficultWord.addEventListener('click', () => {
+      addDifficultWord(inputDifficultWord.value.trim());
+      inputDifficultWord.value = '';
+      inputDifficultWord.focus();
+    });
+    inputDifficultWord.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        addDifficultWord(inputDifficultWord.value.trim());
+        inputDifficultWord.value = '';
+      }
+    });
+  }
+
+  if (btnToggleBatchWords && batchWordsContainer) {
+    btnToggleBatchWords.addEventListener('click', () => {
+      batchWordsContainer.classList.toggle('hidden');
+      if (!batchWordsContainer.classList.contains('hidden') && textareaBatchWords) {
+        textareaBatchWords.focus();
+      }
+    });
+  }
+
+  if (btnImportBatchWords && textareaBatchWords) {
+    btnImportBatchWords.addEventListener('click', () => {
+      addDifficultWord(textareaBatchWords.value);
+      textareaBatchWords.value = '';
+      batchWordsContainer.classList.add('hidden');
+    });
+  }
+
+  if (btnClearDifficultWords) {
+    btnClearDifficultWords.addEventListener('click', () => {
+      if (difficultWordsList.length === 0) return;
+      difficultWordsList = [];
+      saveDifficultWords();
+      renderDifficultTags();
+      parseAndRenderTranscript();
+      showModalStatus('Cleared all words');
+    });
+  }
+
+  const btnClearRehearsalWords = document.getElementById('btn-clear-rehearsal-words');
+  if (btnClearRehearsalWords) {
+    btnClearRehearsalWords.addEventListener('click', () => {
+      if (rehearsalWordsList.length === 0) return;
+      if (rehearsalFilter === 'all') {
+        rehearsalWordsList = [];
+        showModalStatus('Cleared rehearsal fumbles ✓');
+      } else {
+        const initialCount = rehearsalWordsList.length;
+        rehearsalWordsList = rehearsalWordsList.filter((item) => {
+          const r = (typeof item === 'object' && item.reason ? item.reason : 'stumbled').toLowerCase();
+          return r !== rehearsalFilter;
+        });
+        const removed = initialCount - rehearsalWordsList.length;
+        if (removed === 0) return;
+        showModalStatus(`Cleared ${removed} ${rehearsalFilter} fumble${removed === 1 ? '' : 's'} ✓`);
+      }
+      saveRehearsalWords();
+      renderRehearsalTags();
+      parseAndRenderTranscript();
+    });
+  }
+
+  const rehearsalFilterGroup = document.getElementById('rehearsal-filter-group');
+  if (rehearsalFilterGroup) {
+    rehearsalFilterGroup.addEventListener('click', (e) => {
+      const btn = e.target.closest('.rehearsal-filter-btn');
+      if (!btn) return;
+      const filter = btn.getAttribute('data-filter');
+      if (filter && filter !== rehearsalFilter) {
+        rehearsalFilter = filter;
+        renderRehearsalTags();
+        if (syncPrompterWithFilter) {
+          parseAndRenderTranscript();
+        }
+      }
+    });
+  }
+
+  const checkboxFilterPrompter = document.getElementById('checkbox-filter-prompter');
+  if (checkboxFilterPrompter) {
+    checkboxFilterPrompter.checked = syncPrompterWithFilter;
+    checkboxFilterPrompter.addEventListener('change', (e) => {
+      syncPrompterWithFilter = e.target.checked;
+      try {
+        localStorage.setItem('teleprompter_sync_fumble_filter', String(syncPrompterWithFilter));
+      } catch (_) {}
+      parseAndRenderTranscript();
+    });
+  }
+
+  const difficultTagsList = document.getElementById('difficult-tags-list');
+  if (difficultTagsList) {
+    difficultTagsList.addEventListener('click', (e) => {
+      const btn = e.target.closest('.remove-btn');
+      if (!btn) return;
+      const idx = parseInt(btn.getAttribute('data-idx'), 10);
+      if (!isNaN(idx) && idx >= 0 && idx < difficultWordsList.length) {
+        difficultWordsList.splice(idx, 1);
+        saveDifficultWords();
+        renderDifficultTags();
+        parseAndRenderTranscript();
+      }
+    });
+  }
+
+  const rehearsalTagsList = document.getElementById('rehearsal-tags-list');
+  if (rehearsalTagsList) {
+    rehearsalTagsList.addEventListener('click', (e) => {
+      const removeBtn = e.target.closest('.remove-btn');
+      if (removeBtn) {
+        const idx = parseInt(removeBtn.getAttribute('data-idx'), 10);
+        if (!isNaN(idx) && idx >= 0 && idx < rehearsalWordsList.length) {
+          rehearsalWordsList.splice(idx, 1);
+          saveRehearsalWords();
+          renderRehearsalTags();
+          parseAndRenderTranscript();
+          showModalStatus('Fumbled word removed ✓');
+        }
+        return;
+      }
+      const keepBtn = e.target.closest('.keep-btn');
+      if (keepBtn) {
+        const idx = parseInt(keepBtn.getAttribute('data-idx'), 10);
+        if (!isNaN(idx) && idx >= 0 && idx < rehearsalWordsList.length) {
+          const item = rehearsalWordsList[idx];
+          const word = typeof item === 'string' ? item : (item.word || item.clean);
+          addDifficultWord(word);
+          rehearsalWordsList.splice(idx, 1);
+          saveRehearsalWords();
+          renderRehearsalTags();
+          showModalStatus('Saved to Configured Difficult Words ✓');
+        }
+      }
+    });
+  }
+
+  if (colorSwatchesContainer) {
+    colorSwatchesContainer.addEventListener('click', (e) => {
+      const swatch = e.target.closest('.color-swatch');
+      if (!swatch) return;
+      const col = swatch.getAttribute('data-color');
+      if (col) {
+        difficultColor = col;
+        saveDifficultWords();
+        applyDifficultColorStyles();
+        parseAndRenderTranscript();
+        showModalStatus('Color updated ✓');
+      }
+    });
+  }
+
+  if (pickerDifficultColor) {
+    pickerDifficultColor.addEventListener('input', (e) => {
+      difficultColor = e.target.value;
+      saveDifficultWords();
+      applyDifficultColorStyles();
+      parseAndRenderTranscript();
+    });
+  }
+
+  document.querySelectorAll('input[name="difficult-style"]').forEach((radio) => {
+    radio.addEventListener('change', (e) => {
+      difficultStyle = e.target.value;
+      saveDifficultWords();
+      applyDifficultColorStyles();
+      parseAndRenderTranscript();
+      showModalStatus('Style updated ✓');
+    });
+  });
 
   // ---- Audio Source Selection (Browser WebRTC vs Hardware Mic) -------------
   function updateAudioSourceUI(deviceId, devicesList) {
@@ -392,6 +943,12 @@
   }
 
   function updateStopButtonText() {
+    if (isRehearsal) {
+      btnStop.textContent = 'Finish Rehearsal';
+      btnStop.className = 'px-4 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold rounded shadow transition cursor-pointer';
+      return;
+    }
+    btnStop.className = 'px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded shadow transition cursor-pointer';
     const mode = optRecordMode ? optRecordMode.value : 'video';
     if (mode === 'audio') {
       const fmt = (activeAudioFormat || 'mp3').toUpperCase();
@@ -462,12 +1019,53 @@
       case 'sync':
         onSync(msg);
         break;
+      case 'fumble':
+        onFumble(msg);
+        break;
+      case 'rehearsal_summary':
+        onRehearsalSummary(msg);
+        break;
       case 'error':
         speechHud.textContent = '⚠ ' + msg.message;
         setBadge(vadStatus, 'ERROR', 'bg-red-950 text-red-400 border-red-500/30');
         break;
       default:
         break;
+    }
+  }
+
+  function onFumble(msg) {
+    const incoming = Array.isArray(msg.fumbles) ? msg.fumbles : (msg.fumble ? [msg.fumble] : []);
+    let added = false;
+    incoming.forEach((f) => {
+      if (!f || !f.clean) return;
+      const clean = f.clean.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
+      if (!clean) return;
+      if (!rehearsalWordsSet.has(clean)) {
+        rehearsalWordsList.push({
+          word: f.word || clean,
+          clean: clean,
+          reason: f.reason || 'stumbled',
+        });
+        rehearsalWordsSet.add(clean);
+        added = true;
+      }
+      const wordEl = document.getElementById(`w-${f.index}`);
+      if (wordEl) {
+        const reason = f.reason || 'stumbled';
+        wordEl.classList.add('prompter-word-difficult', `style-${difficultStyle}`, 'prompter-word-rehearsal', `prompter-word-rehearsal-${reason}`);
+      }
+    });
+
+    if (added) {
+      saveRehearsalWords();
+      renderRehearsalTags();
+    }
+  }
+
+  function onRehearsalSummary(msg) {
+    if (msg.fumbles && Array.isArray(msg.fumbles)) {
+      onFumble(msg);
     }
   }
 
@@ -531,8 +1129,13 @@
   // ---- Update start button (disabled until ready) --------------------------
   function updateStartButton() {
     const ready = wsConnected && modelReady;
-    btnStart.disabled = !ready || isPrompting || allWords.length === 0;
-    if (!modelReady && wsConnected) btnStart.disabled = true;
+    const canRun = ready && !isPrompting && allWords.length > 0;
+    btnStart.disabled = !canRun;
+    if (btnRehearse) btnRehearse.disabled = !canRun;
+    if (!modelReady && wsConnected) {
+      btnStart.disabled = true;
+      if (btnRehearse) btnRehearse.disabled = true;
+    }
   }
 
   // ---- Audio initialization & local VU analyser ----------------------------
@@ -993,6 +1596,7 @@
       if (!transcriptInput.value || !transcriptInput.value.trim()) return;
       const formatted = formatScriptForPrompter(transcriptInput.value);
       transcriptInput.value = formatted;
+      saveTranscriptIfEnabled();
       parseAndRenderTranscript();
       updateStartButton();
       showFormatToast('Formatted ✓');
@@ -1000,11 +1604,17 @@
   }
 
   transcriptInput.addEventListener('paste', () => {
-    if (!autoFormatOnPaste) return;
+    if (!autoFormatOnPaste) {
+      setTimeout(() => {
+        saveTranscriptIfEnabled();
+      }, 0);
+      return;
+    }
     setTimeout(() => {
       if (!transcriptInput.value.trim()) return;
       const formatted = formatScriptForPrompter(transcriptInput.value);
       transcriptInput.value = formatted;
+      saveTranscriptIfEnabled();
       parseAndRenderTranscript();
       updateStartButton();
       showFormatToast('Auto-formatted ✓');
@@ -1044,6 +1654,7 @@
       } else {
         transcriptInput.value = rawText;
       }
+      saveTranscriptIfEnabled();
       parseAndRenderTranscript();
       updateStartButton();
     } catch (err) {
@@ -1052,6 +1663,7 @@
   });
 
   transcriptInput.addEventListener('input', () => {
+    saveTranscriptIfEnabled();
     parseAndRenderTranscript();
     updateStartButton();
   });
@@ -1131,12 +1743,40 @@
       return;
     }
 
+    const rehearsalReasonMap = new Map();
+    rehearsalWordsList.forEach((item) => {
+      const clean = (typeof item === 'string' ? item : item.clean || item.word).toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
+      if (clean && !rehearsalReasonMap.has(clean)) {
+        const r = typeof item === 'object' && item.reason ? item.reason.toLowerCase() : 'stumbled';
+        rehearsalReasonMap.set(clean, r);
+      }
+    });
+
     linesContainer.innerHTML = linesData.map((line) => {
       if (line.isBlank) {
         return `<div id="line-${line.lineIdx}" class="prompter-line prompter-line-blank select-none"><span class="inline-block w-8 h-[2px] bg-indigo-400/50 rounded-full"></span></div>`;
       }
       const wordsHTML = line.words
-        .map((w) => `<span id="w-${w.globalIdx}" class="prompter-word">${w.original}</span>`)
+        .map((w) => {
+          const clean = w.original.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
+          const isDifficult = clean && difficultWordsSet.has(clean);
+          const rehearsalReason = clean ? rehearsalReasonMap.get(clean) : null;
+          let isRehearsal = false;
+          if (rehearsalReason) {
+            if (syncPrompterWithFilter && rehearsalFilter !== 'all') {
+              isRehearsal = (rehearsalReason === rehearsalFilter);
+            } else {
+              isRehearsal = true;
+            }
+          }
+          let extraClasses = '';
+          if (isDifficult) {
+            extraClasses = ` prompter-word-difficult style-${difficultStyle}`;
+          } else if (isRehearsal) {
+            extraClasses = ` prompter-word-difficult style-${difficultStyle} prompter-word-rehearsal prompter-word-rehearsal-${rehearsalReason}`;
+          }
+          return `<span id="w-${w.globalIdx}" class="prompter-word${extraClasses}">${w.original}</span>`;
+        })
         .join(' ');
       return `<div id="line-${line.lineIdx}" class="prompter-line line-upcoming">${wordsHTML}</div>`;
     }).join('');
@@ -1180,7 +1820,43 @@
     scrollingContent.style.transform = `translateY(${translateY}px)`;
   }
 
-  // ---- Start / Stop ----------------------------------------------------------
+  // ---- Start / Rehearse / Stop -----------------------------------------------
+  if (btnRehearse) {
+    btnRehearse.addEventListener('click', () => {
+      if (isPrompting) return;
+      if (!transcriptInput.value.trim()) return;
+
+      parseAndRenderTranscript();
+      currentWordIndex = 0;
+      isPrompting = true;
+      isRehearsal = true;
+      recordedChunks = [];
+
+      if (optRecordMode) optRecordMode.disabled = true;
+      if (optRecordFormat) optRecordFormat.disabled = true;
+
+      if (audioContext && audioContext.state === 'suspended') audioContext.resume();
+
+      if (activeAudioSource === 'browser' && audioContext && audioContext.state === 'running') {
+        startBrowserAudioStream();
+      }
+
+      mediaRecorder = null;
+      recIndicator.classList.add('hidden');
+
+      send({ type: 'start', words: allWords.map((w) => w.original), rehearsal: true, wpm: 140 });
+
+      updateStopButtonText();
+      btnStart.classList.add('hidden');
+      btnRehearse.classList.add('hidden');
+      btnStop.classList.remove('hidden');
+      updateHighlighting(0);
+      updateStartButton();
+      setBadge(vadStatus, 'REHEARSAL (CATCHING FUMBLES)', 'bg-emerald-950 text-emerald-400 border-emerald-500/30');
+      speechHud.textContent = 'Trial read-through: read naturally. Skipped, stumbled, or repeated words will be caught!';
+    });
+  }
+
   btnStart.addEventListener('click', () => {
     if (isPrompting) return;
     if (!transcriptInput.value.trim()) return;
@@ -1188,6 +1864,7 @@
     parseAndRenderTranscript();
     currentWordIndex = 0;
     isPrompting = true;
+    isRehearsal = false;
     recordedChunks = [];
 
     activeRecordMode = optRecordMode ? optRecordMode.value : 'video';
@@ -1242,6 +1919,7 @@
 
     updateStopButtonText();
     btnStart.classList.add('hidden');
+    if (btnRehearse) btnRehearse.classList.add('hidden');
     btnStop.classList.remove('hidden');
     updateHighlighting(0);
     updateStartButton();
@@ -1328,13 +2006,22 @@
       };
       mediaRecorder.stop();
     } else {
-      setBadge(vadStatus, 'STOPPED', 'bg-gray-800 text-gray-400 border-gray-700');
-      speechHud.textContent = 'Session ended.';
+      if (isRehearsal) {
+        setBadge(vadStatus, 'REHEARSAL COMPLETE', 'bg-emerald-950 text-emerald-400 border-emerald-500/30');
+        const count = rehearsalWordsList.length;
+        speechHud.textContent = `Trial complete! ${count} fumbled ${count === 1 ? 'word' : 'words'} highlighted for your live take.`;
+      } else {
+        setBadge(vadStatus, 'STOPPED', 'bg-gray-800 text-gray-400 border-gray-700');
+        speechHud.textContent = 'Session ended.';
+      }
     }
 
     btnStart.classList.remove('hidden');
+    if (btnRehearse) btnRehearse.classList.remove('hidden');
     btnStop.classList.add('hidden');
     recIndicator.classList.add('hidden');
+    isRehearsal = false;
+    updateStopButtonText();
     updateStartButton();
   });
 
@@ -1386,9 +2073,19 @@
   // ---- Boot ------------------------------------------------------------------
   updateFormatUI();
   updateAudioSourceUI(activeAudioSource);
+  applyDifficultColorStyles();
+  renderDifficultTags();
+  renderRehearsalTags();
   if (optFontsize) {
     linesContainer.style.fontSize = `${optFontsize.value}px`;
   }
+  if (persistTranscript) {
+    const savedTranscript = localStorage.getItem('teleprompter_saved_transcript');
+    if (savedTranscript && (!transcriptInput.value || !transcriptInput.value.trim())) {
+      transcriptInput.value = savedTranscript;
+    }
+  }
+  updateClearButtonVisibility();
   parseAndRenderTranscript();
   initCameraAndAudio();
   updateViewportLines(parseInt(optLines.value, 10));

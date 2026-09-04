@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.3.0] - 2026-09-02
+
+### ✍️ Intelligent Script Auto-Formatting & Rhythmic Phrasing
+- **Rhythmic Cadence Formatting**: Structures paragraphs and continuous prose into 5–8 word spoken phrases matched to natural speech cadence.
+- **Grammatical Clause Splitting**: Breaks lines naturally at clause boundaries, conjunctions, and prepositions while keeping compound technical terms and noun phrases intact.
+- **Visual Breath Pauses**: Inserts breath pause indicator dashes between sentences and major clauses for natural pacing.
+- **Auto-Format on Paste / Import**: Automatically formats text pasted into the editor or imported from `.txt`, `.md`, `.docx`, or `.pdf` files, with user toggle preference persisted in `localStorage`.
+- **Dedicated Auto-Format Button**: Added one-click action button with visual feedback toast in the *Transcript Input* header.
+
+### 🎨 Refactored Prompter Display & Typography
+- **Centered 720px Reader Column**: Text container is centered horizontally with strict left-alignment and consistent 20px padding, eliminating horizontal eye bounce between lines.
+- **Proportional Active Highlight Bar**: Highlight banner restricted to the exact 720px column width with rounded corners (`border-radius: 8px`) and matching inset padding.
+- **Subtle Underline Word Tracker**: Softened active word indicator with a clean gold underline (`border-bottom: 3px solid #eab308;`) and subtle accent tint, replacing the harsh solid yellow box.
+- **Preview Line Visual Hierarchy**: Upcoming preview lines styled with `line-height: 1.7` and `opacity: 0.55` so the speaker naturally focuses on the current spoken line.
+- **Zero Justification**: Strictly enforced standard spacing (`word-spacing: normal; letter-spacing: normal; text-align: left; text-align-last: left;`).
+
+### 📦 Export & File Management
+- **Timestamped Recording Filenames**: Exported media files now automatically include precise local timestamps (`teleprompter_YYYY-MM-DD_HH-MM-SS.mp4 / .mp3 / .wav / .webm`) to prevent file collisions.
+
+---
+
 ## [v1.2.0] - 2026-09-02
 
 ### 🎯 Speech Synchronization & Alignment Engine Redesign

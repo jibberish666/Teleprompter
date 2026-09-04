@@ -88,12 +88,43 @@ def _similarity(a, b):
 
 class Aligner:
     def __init__(self, words, window=5, max_lookahead=25, tolerance=5):
+        self.raw_words = list(words)
         self.script = [normalize(w) for w in words]
         self.cursor = 0
         self.window = window  # Tight local tracking window
         self.max_lookahead = max_lookahead
         self.tolerance = tolerance
         self.streak = 0
+        self.fumbles = []
+        self.fumbled_indices = set()
+        self._new_fumbles = []
+
+    def _record_fumble(self, idx, reason):
+        if 0 <= idx < len(self.script) and idx not in self.fumbled_indices:
+            clean = self.script[idx]
+            if clean:
+                self.fumbled_indices.add(idx)
+                raw = self.raw_words[idx] if idx < len(self.raw_words) else clean
+                fumble_obj = {
+                    "index": idx,
+                    "word": raw,
+                    "clean": clean,
+                    "reason": reason,
+                }
+                self.fumbles.append(fumble_obj)
+                self._new_fumbles.append(fumble_obj)
+
+    @property
+    def has_new_fumbles(self):
+        return bool(self._new_fumbles)
+
+    def get_new_fumbles(self):
+        new_items = self._new_fumbles[:]
+        self._new_fumbles.clear()
+        return new_items
+
+    def get_all_fumbles(self):
+        return list(self.fumbles)
 
     def seek(self, idx):
         """Manually move cursor to a specific word index and reset streak."""
@@ -115,6 +146,13 @@ class Aligner:
             if not tok:
                 i += 1
                 continue
+
+            # Check repetition / stutter against recent words in script
+            if self.cursor > 0 and len(tok) >= 3:
+                for past_idx in range(max(0, self.cursor - 5), self.cursor):
+                    if tok == self.script[past_idx]:
+                        self._record_fumble(past_idx, "repeated")
+                        break
 
             # -------------------------------------------------------------
             # Phase 1: Tight Local Window Search (0 to window-1 words ahead)
@@ -172,6 +210,12 @@ class Aligner:
 
             if best_idx is not None and best_score >= 0.50:
                 self.streak = 0
+                if best_idx > self.cursor:
+                    for skip_idx in range(self.cursor, best_idx):
+                        self._record_fumble(skip_idx, "skipped")
+                elif best_score < 0.85 and not best_compound_asr and not best_compound_script:
+                    self._record_fumble(best_idx, "stumbled")
+
                 if best_compound_asr:
                     self.cursor = best_idx + 1
                     matched.append(best_idx)
@@ -205,6 +249,9 @@ class Aligner:
                         # If combined length >= 7 chars, accept 2-word sequence match
                         if total_len >= 7:
                             self.streak = 0
+                            if j > self.cursor:
+                                for skip_idx in range(self.cursor, j):
+                                    self._record_fumble(skip_idx, "skipped")
                             self.cursor = j + 2
                             matched.extend([j, j + 1])
                             i += 2
@@ -215,6 +262,9 @@ class Aligner:
                             s2 = _similarity(asr_words[i + 2], self.script[j + 2])
                             if s2 >= 0.75:
                                 self.streak = 0
+                                if j > self.cursor:
+                                    for skip_idx in range(self.cursor, j):
+                                        self._record_fumble(skip_idx, "skipped")
                                 self.cursor = j + 3
                                 matched.extend([j, j + 1, j + 2])
                                 i += 3
@@ -223,6 +273,14 @@ class Aligner:
 
             if jump_matched:
                 continue
+
+            # Check if unmatched token was an attempted pronunciation of the current expected word
+            if self.cursor < len(self.script):
+                expected = self.script[self.cursor]
+                if len(tok) >= 3 and len(expected) >= 3:
+                    sim = _similarity(tok, expected)
+                    if sim >= 0.50 or _common_prefix_len(tok, expected) >= 3:
+                        self._record_fumble(self.cursor, "stumbled")
 
             # No match found: increment streak and advance ASR token
             self.streak += 1

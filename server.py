@@ -235,6 +235,9 @@ async def main(args):
     def _on_error(message):
         hub.schedule({"type": "error", "message": message})
 
+    def _on_fumble(fumbles):
+        hub.schedule({"type": "fumble", "fumbles": fumbles})
+
     # Pick profile defaults or explicit overrides
     prof_key = args.profile if args.profile in transcriber.ENGINE_PROFILES else "fast"
     prof = transcriber.ENGINE_PROFILES[prof_key]
@@ -257,6 +260,7 @@ async def main(args):
         on_sync=_on_sync,
         on_status=_on_status,
         on_error=_on_error,
+        on_fumble=_on_fumble,
     )
 
     async def handle_client(ws):
@@ -296,17 +300,35 @@ async def main(args):
         mtype = msg.get("type")
         if mtype == "start":
             words = msg.get("words") or []
+            is_rehearsal = bool(msg.get("rehearsal"))
             if not trans.is_ready:
                 hub.schedule({"type": "error", "message": "Model still loading. Try again shortly."})
                 return
             if not words:
                 hub.schedule({"type": "error", "message": "No transcript to run."})
                 return
-            trans.begin(words)
-            hub.schedule({"type": "status", "state": "running", "running": True})
+            trans.begin(words, is_rehearsal=is_rehearsal)
+            hub.schedule({
+                "type": "status",
+                "state": "running",
+                "running": True,
+                "rehearsal": is_rehearsal,
+            })
         elif mtype == "stop":
+            all_fumbles = trans.aligner.get_all_fumbles() if trans.aligner else []
+            was_rehearsal = trans.is_rehearsal
             trans.stop()
-            hub.schedule({"type": "status", "state": "stopped", "running": False})
+            hub.schedule({
+                "type": "status",
+                "state": "stopped",
+                "running": False,
+                "rehearsal": was_rehearsal,
+            })
+            if was_rehearsal or all_fumbles:
+                hub.schedule({
+                    "type": "rehearsal_summary",
+                    "fumbles": all_fumbles,
+                })
         elif mtype == "seek":
             idx = msg.get("word_index")
             if idx is not None:

@@ -7,17 +7,16 @@ A 100% local, speech-synchronized AI teleprompter. It captures your microphone, 
 
 Everything runs on your local machine—no cloud APIs, no accounts, and no speech/data sent anywhere.
 
----
+## 📢 What's New in v1.3.0
 
-## 📢 What's New in v1.2.0
-
-- **Redesigned Speech Alignment Engine**: Tight local-window matching with distance penalties and mandatory multi-word sequence verification (2–3 words) for lookahead jumps, eliminating false-positive word leaps.
-- **Morphological & Compound Word Matching**: Handles natural inflections (`"balance"` $\leftrightarrow$ `"balancing"`, `"assembly"` $\leftrightarrow$ `"assemblies"`, `"accelerates"` $\leftrightarrow$ `"accelerating"`) and compound tokens (`["high", "speed"]` $\leftrightarrow$ `"highspeed"`).
-- **Dynamic Audio Source Selector**: Switch seamlessly in the UI between **Browser Microphone (Live WebRTC · Recommended)** and host hardware sound devices on the fly.
-- **Silent Input Warning & Recovery**: Real-time silence monitoring flags muted or inactive microphones (`MIC SILENT`) and guides input resolution.
-- **Bi-Directional Seek Synchronization**: Manually jumping via Arrow keys, clicking any transcript word, or clicking **Restart Script** instantly resynchronizes the backend aligner.
-- **Custom Brand Favicon Suite**: Native cross-device favicons (`favicon.ico`, PNGs, and Apple touch icon).
-- **Automated Test Suite**: 18 unit and real-session playback tests in `test_aligner.py`.
+- **Intelligent Script Phrasing & Auto-Formatting**: Converts raw scripts and long paragraphs into 5–8 word spoken phrases matched to natural speech cadence, preserving compound technical terms.
+- **Visual Breath Pauses**: Automatically inserts breath pause indicator lines between sentences and major thoughts for natural pacing.
+- **Auto-Format on Paste / Import**: Formats text pasted into the editor or imported from `.txt`, `.md`, `.docx`, or `.pdf` files automatically, with an in-UI toggle switch.
+- **Centered 720px Reader Column**: Text container centered horizontally on screen with clean left-anchored alignment, eliminating horizontal eye bounce between lines.
+- **Proportional Active Highlight Bar**: Bounded to the exact 720px text column with rounded corners (`border-radius: 8px`) and consistent padding rather than stretching edge-to-edge.
+- **Subtle Underline Word Tracker**: Softened the active word indicator with a clean gold underline (`border-bottom: 3px solid #eab308;`) and subtle accent tint, replacing the harsh solid yellow box.
+- **Preview Line Visual Hierarchy**: Upcoming lines feature `line-height: 1.7` and `opacity: 0.55` to naturally direct visual focus to the current spoken line.
+- **Timestamped Recording Downloads**: Exported media files automatically include precise local timestamps (`teleprompter_YYYY-MM-DD_HH-MM-SS.<ext>`).
 - See full notes in [CHANGELOG.md](file:///Users/philkershaw/Documents/work/Tools/teleprompter/CHANGELOG.md) or the [Releases Page](https://github.com/jibberish666/Teleprompter/releases).
 
 ---
@@ -76,6 +75,7 @@ python server.py
 1. Open your browser to **`http://127.0.0.1:8000`**.
 2. **Permissions**: Allow Camera + Microphone access when prompted by the browser.
 3. **Load Script**: Paste your script or upload a file (`.txt`, `.md`, `.docx`, `.pdf`).
+   - Use the **Auto-Format** button (or leave **Auto-format on paste / import** checked) to instantly convert long paragraphs into 5–8 word spoken phrases with breath pauses.
 4. **Select Speech Preset** (UI header):
    - **Ultra Fast**: `0.4s` sync rate (`tiny.en` model)
    - **Fast**: `0.6s` sync rate (`base.en` model - recommended)
@@ -84,12 +84,14 @@ python server.py
 6. **Save Recordings**:
    - **Video Mode**: Save as **MP4** (`.mp4`) or **WebM** (`.webm`).
    - **Audio Mode**: Save as **MP3** (`.mp3`), **WAV** (`.wav` lossless PCM), or **WebM** (`.webm`).
-   - Click **Stop & Save** to download your session recording immediately to your computer.
+   - Click **Stop & Save** to download your session recording immediately (saved with a timestamped filename like `teleprompter_2026-09-02_16-20-00.mp4`).
 
 ---
 
 ## 🎛️ Keyboard & UI Controls
 
+- **Auto-Format Script**: Click **Auto-Format** in the transcript panel to break paragraphs into 5–8 word rhythmic phrases with breath pauses.
+- **Auto-Format on Paste**: Checkbox toggle to automatically format text on paste or file upload (persisted in preferences).
 - **Restart Script Button**: Rewind instantly back to the first word without modifying or clearing text.
 - **Click to Seek**: Click any word in the transcript display to immediately move the highlight and resynchronize the backend aligner.
 - **Arrow Up / Down**: Manually step the highlight backward or forward (backend aligner syncs automatically).

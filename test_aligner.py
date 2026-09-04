@@ -229,5 +229,50 @@ class TestRealSessionPlayback(unittest.TestCase):
                 )
 
 
+class TestFumbleDetection(unittest.TestCase):
+    def test_skipped_words_detected_on_forward_jump(self):
+        script = ["we", "will", "carefully", "inspect", "the", "turbocharger", "today"]
+        al = aligner.Aligner(script, window=5)
+        # Match 'we', 'will'
+        al.align(["we", "will"])
+        self.assertEqual(al.cursor, 2)
+        self.assertEqual(len(al.get_all_fumbles()), 0)
+
+        # Speaker skips 'carefully', 'inspect' and says 'the', 'turbocharger'
+        al.align(["the", "turbocharger"])
+        fumbles = al.get_all_fumbles()
+        fumbled_words = [f["clean"] for f in fumbles]
+        fumbled_reasons = {f["clean"]: f["reason"] for f in fumbles}
+
+        self.assertIn("carefully", fumbled_words)
+        self.assertIn("inspect", fumbled_words)
+        self.assertEqual(fumbled_reasons["carefully"], "skipped")
+        self.assertEqual(fumbled_reasons["inspect"], "skipped")
+
+    def test_repeated_words_detected(self):
+        script = ["we", "must", "deliver", "precision", "results"]
+        al = aligner.Aligner(script, window=5)
+        al.align(["we", "must", "deliver"])
+        self.assertEqual(al.cursor, 3)
+
+        # Speaker stutters/repeats 'deliver'
+        al.align(["deliver"])
+        fumbles = al.get_all_fumbles()
+        fumbled_reasons = {f["clean"]: f["reason"] for f in fumbles}
+        self.assertIn("deliver", fumbled_reasons)
+        self.assertEqual(fumbled_reasons["deliver"], "repeated")
+
+    def test_stumbled_word_detected(self):
+        script = ["we", "build", "precision", "engineering"]
+        al = aligner.Aligner(script, window=5)
+        al.align(["we", "build"])
+        # Speaker stumbles on 'precision' with a close attempt 'precis'
+        al.align(["precis"])
+        fumbles = al.get_all_fumbles()
+        fumbled_reasons = {f["clean"]: f["reason"] for f in fumbles}
+        self.assertIn("precision", fumbled_reasons)
+        self.assertEqual(fumbled_reasons["precision"], "stumbled")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -119,3 +119,252 @@
   color: #ffffff !important;
   font-weight: 700;
 }
+
+/* ==========================================================================
+   Difficult Words & Pronunciation Cue Styling
+   ========================================================================== */
+
+:root {
+  --difficult-color: #f59e0b;
+  --difficult-bg: rgba(245, 158, 11, 0.22);
+  --difficult-border: rgba(245, 158, 11, 0.55);
+}
+
+.prompter-word-difficult {
+  display: inline-block;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+/* Pill Treatment (Default) */
+.prompter-word-difficult.style-pill,
+.difficult-style-pill .prompter-word-difficult {
+  color: var(--difficult-color) !important;
+  background-color: var(--difficult-bg) !important;
+  border: 1px solid var(--difficult-border) !important;
+  border-radius: 4px !important;
+  padding: 0 4px 1px 4px !important;
+  font-weight: 700 !important;
+}
+
+/* Text Glow Treatment */
+.prompter-word-difficult.style-glow,
+.difficult-style-glow .prompter-word-difficult {
+  color: var(--difficult-color) !important;
+  text-shadow: 0 0 8px var(--difficult-color), 0 0 16px var(--difficult-color) !important;
+  font-weight: 700 !important;
+}
+
+/* Underline Accent Treatment */
+.prompter-word-difficult.style-underline,
+.difficult-style-underline .prompter-word-difficult {
+  color: var(--difficult-color) !important;
+  border-bottom: 3px solid var(--difficult-color) !important;
+  padding-bottom: 1px !important;
+  font-weight: 700 !important;
+}
+
+/* When difficult word is actively spoken */
+.prompter-word-difficult.word-active {
+  border-bottom: 3px solid #eab308 !important;
+  box-shadow: 0 0 12px var(--difficult-color) !important;
+}
+
+/* Difficult Tag Chips in Modal */
+.difficult-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background-color: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.difficult-tag-chip:hover {
+  background-color: rgba(245, 158, 11, 0.25);
+}
+
+.difficult-tag-chip .remove-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  color: #fca5a5;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.difficult-tag-chip .remove-btn:hover {
+  background-color: rgba(239, 68, 68, 0.3);
+  color: #ffffff;
+}
+
+.color-swatch.active-swatch {
+  border-color: #ffffff !important;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.6), 0 0 10px rgba(255, 255, 255, 0.4);
+}
+
+/* Rehearsal Fumble Tag Chips in Modal */
+.rehearsal-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #a7f3d0;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.rehearsal-tag-chip:hover {
+  background-color: rgba(16, 185, 129, 0.22);
+}
+
+.rehearsal-badge {
+  font-size: 9px;
+  text-transform: uppercase;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 4px;
+  letter-spacing: 0.03em;
+}
+
+.rehearsal-badge-skipped {
+  background-color: rgba(239, 68, 68, 0.25);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.rehearsal-badge-stumbled {
+  background-color: rgba(245, 158, 11, 0.25);
+  color: #fcd34d;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.rehearsal-badge-repeated {
+  background-color: rgba(168, 85, 247, 0.25);
+  color: #d8b4fe;
+  border: 1px solid rgba(168, 85, 247, 0.4);
+}
+
+.rehearsal-tag-chip .keep-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.2);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.rehearsal-tag-chip .keep-btn:hover {
+  background: rgba(16, 185, 129, 0.4);
+  color: #ffffff;
+}
+
+.rehearsal-tag-chip .remove-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  color: #fca5a5;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.rehearsal-tag-chip .remove-btn:hover {
+  background-color: rgba(239, 68, 68, 0.35);
+  color: #ffffff;
+}
+
+/* Rehearsal Tag Filter Buttons in Modal */
+.rehearsal-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #9ca3af;
+  background-color: rgba(17, 24, 39, 0.8);
+  border: 1px solid rgba(55, 65, 81, 0.7);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.rehearsal-filter-btn:hover {
+  background-color: rgba(31, 41, 55, 0.9);
+  color: #e5e7eb;
+  border-color: rgba(75, 85, 99, 0.9);
+}
+
+.rehearsal-filter-btn.active[data-filter="all"] {
+  background-color: rgba(6, 78, 59, 0.6);
+  border-color: rgba(16, 185, 129, 0.6);
+  color: #6ee7b7;
+}
+
+.rehearsal-filter-btn.active[data-filter="skipped"] {
+  background-color: rgba(127, 29, 29, 0.6);
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #fca5a5;
+}
+
+.rehearsal-filter-btn.active[data-filter="stumbled"] {
+  background-color: rgba(120, 53, 15, 0.6);
+  border-color: rgba(245, 158, 11, 0.6);
+  color: #fcd34d;
+}
+
+.rehearsal-filter-btn.active[data-filter="repeated"] {
+  background-color: rgba(88, 28, 135, 0.6);
+  border-color: rgba(168, 85, 247, 0.6);
+  color: #d8b4fe;
+}
+
+.rehearsal-filter-count {
+  font-size: 9px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  padding: 0 4px;
+  border-radius: 9999px;
+  background-color: rgba(0, 0, 0, 0.35);
+  line-height: 1.3;
+}
+
+/* Rehearsal words on prompter */
+.prompter-word-rehearsal {
+  position: relative;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: rgba(245, 158, 11, 0.8);
+  text-underline-offset: 4px;
+}
+
+.prompter-word-rehearsal-skipped {
+  text-decoration-color: rgba(239, 68, 68, 0.85);
+}
+
+.prompter-word-rehearsal-stumbled {
+  text-decoration-color: rgba(245, 158, 11, 0.85);
+}
+
+.prompter-word-rehearsal-repeated {
+  text-decoration-color: rgba(168, 85, 247, 0.85);
+}
