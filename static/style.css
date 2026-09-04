@@ -13,7 +13,7 @@
 /* Shared container centered horizontally on screen, text aligned strictly left */
 .prompter-text-container,
 #viewing-window {
-  max-width: 720px !important;
+  max-width: 100% !important;
   margin: 0 auto !important;
   width: 100% !important;
   text-align: left !important;
@@ -22,9 +22,9 @@
   letter-spacing: normal !important;
 }
 
-/* Active Line Highlight Bar: restricted to 720px, rounded with consistent padding */
+/* Active Line Highlight Bar: adapts to prompter box width, rounded with consistent padding */
 #cursor-bar {
-  max-width: 720px !important;
+  max-width: 100% !important;
   width: 100% !important;
   left: 0 !important;
   right: 0 !important;
@@ -46,9 +46,9 @@
 
 /* Base line styling: left-anchored, consistent 20px padding, no justification */
 .prompter-line {
-  min-height: 45px;
-  height: 45px;
-  line-height: 1.7 !important;
+  min-height: var(--prompter-line-height, 45px);
+  height: var(--prompter-line-height, 45px);
+  line-height: var(--prompter-line-height, 45px) !important;
   text-align: left !important;
   text-align-last: left !important;
   word-spacing: normal !important;
@@ -86,8 +86,8 @@
 
 /* Blank/Pause line representation */
 .prompter-line-blank {
-  min-height: 45px;
-  height: 45px;
+  min-height: var(--prompter-line-height, 45px);
+  height: var(--prompter-line-height, 45px);
   display: flex !important;
   align-items: center;
   justify-content: flex-start !important;

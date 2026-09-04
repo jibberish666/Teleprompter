@@ -49,7 +49,7 @@
       <div>
         <div class="flex items-center justify-between mb-1.5">
           <label class="block text-xs font-semibold uppercase tracking-wider text-gray-400">Transcript Input</label>
-          <button id="btn-auto-format" type="button" class="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 hover:text-white border border-indigo-700/60 shadow-sm transition active:scale-95 cursor-pointer" title="Automatically format into 5-8 word spoken rhythmic phrases with breath pauses">
+          <button id="btn-auto-format" type="button" class="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 hover:text-white border border-indigo-700/60 shadow-sm transition active:scale-95 cursor-pointer" title="Format script into 5–8 word spoken cadence phrases with breath pauses">
             <svg class="w-3 h-3 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
             <span id="btn-auto-format-text">Auto-Format</span>
           </button>
@@ -91,6 +91,11 @@
         <div>
           <label class="flex justify-between text-gray-400">Font Size <span id="val-fontsize" class="text-indigo-400 font-bold">25px</span></label>
           <input type="range" id="opt-fontsize" min="16" max="36" value="25" class="w-full">
+        </div>
+
+        <div>
+          <label class="flex justify-between text-gray-400">Box Width <span id="val-boxwidth" class="text-indigo-400 font-bold">90%</span></label>
+          <input type="range" id="opt-boxwidth" min="60" max="96" step="2" value="90" class="w-full">
         </div>
 
         <div>
@@ -197,21 +202,21 @@
 
       <video id="camera-feed" autoplay playsinline muted class="absolute inset-0 w-full h-full object-cover hidden"></video>
 
-      <div id="prompter-box" class="absolute top-10 inset-x-4 max-w-[800px] mx-auto bg-gray-900/90 border border-gray-700/80 rounded-xl shadow-2xl backdrop-blur-md p-4 transition-all z-30 pointer-events-auto">
+      <div id="prompter-box" class="absolute top-10 w-[90%] max-w-[90%] mx-auto bg-gray-900/90 border border-gray-700/80 rounded-xl shadow-2xl backdrop-blur-md p-4 transition-all z-30 pointer-events-auto">
 
-        <div id="viewing-window" class="relative overflow-hidden text-left text-white font-medium max-w-[720px] mx-auto w-full" style="height:135px">
+        <div id="viewing-window" class="relative overflow-hidden text-left text-white font-medium w-full mx-auto" style="height:135px">
 
           <div id="cursor-bar" class="absolute top-[45px] left-0 right-0 h-[45px] bg-indigo-500/20 border border-indigo-400/35 rounded-lg pointer-events-none z-0"></div>
 
           <div id="scrolling-content" class="relative z-10 transition-transform duration-200 ease-out" style="padding-top:45px">
             <div id="lines-container" class="space-y-0 text-left">
-              <p class="h-[45px] flex items-center justify-start px-5 text-gray-400 italic">Paste transcript & press Start Session...</p>
+              <p class="prompter-line text-gray-400 italic">Paste transcript & press Start Session...</p>
             </div>
           </div>
 
         </div>
 
-        <div class="mt-3 pt-2 border-t border-gray-800/80 flex items-center justify-between text-[11px] font-mono max-w-[720px] mx-auto w-full">
+        <div class="mt-3 pt-2 border-t border-gray-800/80 flex items-center justify-between text-[11px] font-mono w-full mx-auto">
           <span class="text-gray-500 uppercase tracking-widest text-[9px]">Whisper Sync:</span>
           <span id="speech-hud" class="text-indigo-300 font-semibold">Waiting for local model…</span>
         </div>

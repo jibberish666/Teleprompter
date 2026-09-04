@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.4.0] - 2026-09-04
+
+### 🎭 Rehearsal & Practice Mode
+- **Zero-Pressure Practice Session**: Rehearse scripts freely without triggering video or audio file recordings while capturing real-time speech analytics.
+- **Real-Time Speech Diagnostics**: Automatically detects speaker pauses, stutters, vocal hesitations, and pacing variations during rehearsals.
+- **Difficult Words Analysis**: Automatically tracks and tags words where hesitation or misrecognition occurred, surfacing frequent stumbling blocks.
+- **Trial Performance Summary**: Displays detailed rehearsal metrics including Words Per Minute (WPM), Fluency Score, total duration, and word latency stats.
+- **Trial & Run Tag Filtering**: Filter practice tags and diagnostic feedback by individual rehearsal run (`Run #1`, `Run #2`, etc.) or view aggregate performance across all runs.
+
+### 📐 Screen Space & Responsive Layout Optimizations
+- **Adjustable Prompter Box Width**: Added a new slider in display settings to dynamically adjust the teleprompter box width from 60% to 96% (defaulting to 90% for an expansive, clean reading view).
+- **Proportional Line Height Scaling**: Prompter line height and scrolling translations now dynamically compute and adapt to the active font size (16px–36px) via `getLineHeightForFontSize` and CSS custom property `--prompter-line-height`.
+- **Responsive Active Highlight Bar**: Active reading bar (`#cursor-bar`) and text viewing window automatically expand to fill 100% of the prompter box width without horizontal overflow.
+
+### ✍️ Dynamic Programming Script Auto-Formatter
+- **Optimal Cadence Chunking**: Upgraded the script auto-formatter to use dynamic programming (DP) optimization to break continuous prose into natural 5–8 word spoken phrases.
+- **Dangling Word Prevention**: Heavily penalizes line endings ending on prepositions, conjunctions, or determiners (`of`, `for`, `with`, `and`, `the`, `in`, `to`, etc.), ensuring lines start with forward momentum.
+- **Compound Phrase Protection**: Safeguards technical compound terms and semantic noun clusters from being split across line boundaries.
+- **Intelligent Visual Breath Pauses**: Automatically inserts visual breath pause breaks between sentences and major clauses for natural speaker delivery.
+
+### 💾 Persistence & Privacy Improvements
+- **Persistent Script Input**: Script text in the transcript editor is automatically saved in browser `localStorage` (`teleprompter_saved_transcript`), preventing script loss across page refreshes.
+- **Privacy-First Camera Startup**: Camera video feed starts disabled by default upon application launch, saving resources and preserving privacy until manually toggled.
+- **Settings Persistence**: Prompter box width slider settings and trial filters are automatically remembered across sessions.
+
+### 🤖 Teleprompter Text Formatter Agent Skill
+- **Agent Formatting Cheatsheet**: Added `.agents/skills/teleprompter-text-formatter/` skill with comprehensive instructions and examples for AI agents to automatically cadence, chunk, and format scripts according to teleprompter presentation rules.
+
+---
+
 ## [v1.3.0] - 2026-09-02
 
 ### ✍️ Intelligent Script Auto-Formatting & Rhythmic Phrasing
