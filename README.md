@@ -9,7 +9,8 @@ Everything runs on your local machine—no cloud APIs, no accounts, and no speec
 
 ## 📢 What's New in v1.4.0
 
-- **Rehearsal & Practice Mode**: Rehearse scripts with zero pressure without recording files. Features real-time speech analytics (stutter, pause, and hesitation detection), automatic **Difficult Words** identification, detailed trial performance metrics (WPM, Fluency score, word latency), and trial/run tag filtering.
+- **Trial Rehearsal Mode & Automatic Fumble Catcher**: Click the new **Rehearse** button in the top bar to run a zero-pressure dry run. The teleprompter scrolls and tracks your speech with local Whisper while **completely disabling audio/video recording**. The alignment engine automatically catches **Skipped**, **Stumbled**, and **Repeated** words, marking them directly on your prompter script as visual cues for your live recording take.
+- **Difficult Words & Custom Highlights Panel**: Accessible via **Script & Options** $\rightarrow$ **Difficult Words & Colors…**. Inspect caught trial fumbles, filter by category (*Skipped*, *Stumbled*, *Repeated*), sync filter visibility directly with the teleprompter screen, customize cue colors (6 palette swatches + custom hex color picker), and choose your highlight style (*Filled Pill*, *Text Glow*, or *Underline Accent*).
 - **Screen Space & Responsive Layout**: Adjust the prompter box width dynamically from 60% to 96% with a dedicated slider. Font size changes now dynamically scale line height (`getLineHeightForFontSize`) and scroll offsets, and the active highlight bar cleanly adapts to the prompter width.
 - **Dynamic Programming Script Auto-Formatter**: Script auto-formatting now uses a dynamic programming algorithm to find optimal 5–8 word spoken phrases, heavily penalizing dangling prepositions and conjunctions at line ends while preserving compound terms and adding visual breath pauses.
 - **Persistent Script Input**: Scripts are automatically saved in `localStorage`, preventing lost scripts on accidental refresh or navigation.
@@ -78,18 +79,41 @@ python server.py
    - **Ultra Fast**: `0.4s` sync rate (`tiny.en` model)
    - **Fast**: `0.6s` sync rate (`base.en` model - recommended)
    - **Standard**: `1.2s` sync rate (`base.en` model)
-5. Click **Start Session**: Speak aloud and watch the text highlight and scroll automatically in real-time sync with your voice.
-6. **Save Recordings**:
-   - **Video Mode**: Save as **MP4** (`.mp4`) or **WebM** (`.webm`).
-   - **Audio Mode**: Save as **MP3** (`.mp3`), **WAV** (`.wav` lossless PCM), or **WebM** (`.webm`).
-   - Click **Stop & Save** to download your session recording immediately (saved with a timestamped filename like `teleprompter_2026-09-02_16-20-00.mp4`).
+5. **Trial Run (Rehearse)**:
+   - Click the green **Rehearse** button to do a dry run. The teleprompter scrolls and follows your voice without recording video or audio.
+   - Any stumbled, skipped, or repeated words are caught automatically and highlighted directly on your script as visual cues.
+6. **Customize Cues & Difficult Words**:
+   - Open **Script & Options** $\rightarrow$ **Difficult Words & Colors…** to review detected fumbles, filter by tag (*Skipped*, *Stumbled*, *Repeated*), and customize highlight styling (*Filled Pill*, *Text Glow*, or *Underline Accent*).
+7. **Record Live Take**:
+   - Click **Start Session** when ready. Speak naturally—the teleprompter scrolls in real-time with your voice while keeping your rehearsal warning cues visible.
+   - Click **Stop & Save** to download your session recording immediately (saved with a timestamped filename like `teleprompter_2026-09-04_17-15-00.mp4`).
+
+---
+
+## 🎭 Trial Rehearsal Mode & Fumble Catcher
+
+Rehearsal Mode is designed for zero-pressure practice before hitting record:
+
+- **Zero-Pressure Practice**: Runs speech synchronization and automatic prompter scrolling with local Whisper while **completely disabling audio and video recording**. No temporary files or unwanted recordings are written to disk.
+- **Automatic Fumble Categorization**:
+  - 🔴 **Skipped Words**: Words you jumped over, omitted, or skipped in the text.
+  - 🟡 **Stumbled Words**: Words where pronunciation hesitations, stutters, or low-confidence recognition occurred (<0.85 phonetic similarity).
+  - 🟣 **Repeated Words**: Words repeated within the local context (false starts or stammering).
+- **Persistent Visual Cues**: When you stop your rehearsal, all detected fumbles remain clearly highlighted on the prompter text, giving you real-time visual heads-up warnings during your actual recording session.
+- **Difficult Words & Highlights Dialog**:
+  - **Filter Tabs**: Toggle between `All`, `Skipped`, `Stumbled`, and `Repeated` with real-time fumble count badges.
+  - **Sync with Prompter**: Check this option to only highlight words on screen matching your currently active filter tab.
+  - **Custom Color Swatches**: Select from 6 vibrant color palettes (Amber, Coral/Rose, Emerald, Cyan, Fuchsia, Gold) or enter an arbitrary hex color.
+  - **Styling Treatments**: Choose between **Filled Pill** badge, **Text Glow**, or **Underline Accent** for script cues.
+  - **Manual Difficult Words**: Type or batch-paste complex vocabulary or technical terms into the dialog to highlight them alongside rehearsal fumbles.
 
 ---
 
 ## 🎛️ Keyboard & UI Controls
 
-- **Rehearse / Practice Mode**: Toggle rehearsal mode to practice scripts without saving recordings, tracking pauses, stutters, and difficult words across trial runs.
-- **Trial & Difficult Words Filter**: View and filter detected difficult words and pacing feedback by specific rehearsal runs.
+- **Rehearse Button**: Start a trial read-through without saving recording files, capturing fumbles in real time.
+- **Difficult Words & Colors**: Open the configuration panel to review fumbles, filter categories, and change cue styling.
+- **Prompter Box Width Slider**: Adjust prompter reading width dynamically between 60% and 96% (saved in `localStorage`).
 - **Auto-Format Script**: Click **Auto-Format** in the transcript panel to break paragraphs into 5–8 word rhythmic phrases with breath pauses.
 - **Auto-Format on Paste**: Checkbox toggle to automatically format text on paste or file upload (persisted in preferences).
 - **Restart Script Button**: Rewind instantly back to the first word without modifying or clearing text.

@@ -4,12 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [v1.4.0] - 2026-09-04
 
-### 🎭 Rehearsal & Practice Mode
-- **Zero-Pressure Practice Session**: Rehearse scripts freely without triggering video or audio file recordings while capturing real-time speech analytics.
-- **Real-Time Speech Diagnostics**: Automatically detects speaker pauses, stutters, vocal hesitations, and pacing variations during rehearsals.
-- **Difficult Words Analysis**: Automatically tracks and tags words where hesitation or misrecognition occurred, surfacing frequent stumbling blocks.
-- **Trial Performance Summary**: Displays detailed rehearsal metrics including Words Per Minute (WPM), Fluency Score, total duration, and word latency stats.
-- **Trial & Run Tag Filtering**: Filter practice tags and diagnostic feedback by individual rehearsal run (`Run #1`, `Run #2`, etc.) or view aggregate performance across all runs.
+### 🎭 Trial Rehearsal Mode & Fumble Catcher
+- **Dedicated Rehearse Action Button**: Added a prominent emerald **Rehearse** button to the top header for zero-pressure dry runs. Rehearse mode synchronizes speech and scrolls the prompter in real-time with local Whisper while **completely disabling audio and video recording**.
+- **Real-Time Fumble Detection Engine**: Backend alignment engine (`aligner.py`) automatically tracks and categorizes speaking hiccups during trial runs:
+  - **Skipped Words** (red cue): Words inadvertently omitted or jumped over in the script.
+  - **Stumbled Words** (amber cue): Words with phonetic hesitation, pronunciation delays, or low-confidence recognition (<0.85 similarity).
+  - **Repeated Words** (purple cue): False starts, stammering, or repeated words within the local context.
+- **Live Script Cueing for Final Takes**: All detected trial fumbles are automatically highlighted directly in the teleprompter script, serving as visual warning cues when doing your final live recording.
+- **Difficult Words & Custom Highlights Modal**:
+  - Accessible from **Script & Options** $\rightarrow$ **Difficult Words & Colors…**
+  - Displays caught **Trial Rehearsal Fumbles** alongside manually added difficult terms and batch-pasted vocabulary lists.
+  - **Fumble Category Filtering**: Filter by **All**, **Skipped**, **Stumbled**, or **Repeated** with dynamic count badges.
+  - **Sync with Prompter**: Checkbox to restrict teleprompter script cues strictly to the active filter tab.
+  - **Visual Treatment Styling**: Choose between **Filled Pill**, **Text Glow**, or **Underline Accent** treatments.
+  - **Color Palette Customization**: 6 curated preset swatches (Amber, Rose, Emerald, Cyan, Fuchsia, Gold) plus an interactive hex color picker.
+  - **Fumble Management**: Remove individual fumbled words via `×` chips or clear fumbles by filter category.
 
 ### 📐 Screen Space & Responsive Layout Optimizations
 - **Adjustable Prompter Box Width**: Added a new slider in display settings to dynamically adjust the teleprompter box width from 60% to 96% (defaulting to 90% for an expansive, clean reading view).
