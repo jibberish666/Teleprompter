@@ -62,6 +62,7 @@ class Transcriber:
         on_status=None,
         on_error=None,
         on_fumble=None,
+        observer=None,
     ):
         self.profile = profile if profile in ENGINE_PROFILES else "fast"
         prof = ENGINE_PROFILES[self.profile]
@@ -80,6 +81,7 @@ class Transcriber:
         self.on_status = on_status
         self.on_error = on_error
         self.on_fumble = on_fumble
+        self.observer = observer
 
         self.model = None
         self.aligner = None
@@ -194,12 +196,14 @@ class Transcriber:
         self.loop_thread = threading.Thread(target=self._loop, daemon=True)
         self.loop_thread.start()
 
-    def begin(self, words, is_rehearsal=False):
+    def begin(self, words, is_rehearsal=False, observer=None):
         """Begin a session: reset aligner + committed anchor, run detection."""
+        eff_observer = observer if observer is not None else self.observer
         self.aligner = aligner.Aligner(
             words,
             window=self.align_window,
             tolerance=self.align_tolerance,
+            observer=eff_observer,
         )
         self.is_rehearsal = bool(is_rehearsal)
         self.committed_abs_end = 0.0

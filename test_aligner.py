@@ -3,6 +3,7 @@ import os
 import unittest
 
 import aligner
+import telemetry
 
 
 class TestNormalization(unittest.TestCase):
@@ -232,7 +233,8 @@ class TestRealSessionPlayback(unittest.TestCase):
 class TestFumbleDetection(unittest.TestCase):
     def test_skipped_words_detected_on_forward_jump(self):
         script = ["we", "will", "carefully", "inspect", "the", "turbocharger", "today"]
-        al = aligner.Aligner(script, window=5)
+        observer = telemetry.RehearsalObserver(script)
+        al = aligner.Aligner(script, window=5, observer=observer)
         # Match 'we', 'will'
         al.align(["we", "will"])
         self.assertEqual(al.cursor, 2)
@@ -248,10 +250,12 @@ class TestFumbleDetection(unittest.TestCase):
         self.assertIn("inspect", fumbled_words)
         self.assertEqual(fumbled_reasons["carefully"], "skipped")
         self.assertEqual(fumbled_reasons["inspect"], "skipped")
+        self.assertEqual(observer.get_all_fumbles(), fumbles)
 
     def test_repeated_words_detected(self):
         script = ["we", "must", "deliver", "precision", "results"]
-        al = aligner.Aligner(script, window=5)
+        observer = telemetry.RehearsalObserver(script)
+        al = aligner.Aligner(script, window=5, observer=observer)
         al.align(["we", "must", "deliver"])
         self.assertEqual(al.cursor, 3)
 
@@ -264,7 +268,8 @@ class TestFumbleDetection(unittest.TestCase):
 
     def test_stumbled_word_detected(self):
         script = ["we", "build", "precision", "engineering"]
-        al = aligner.Aligner(script, window=5)
+        observer = telemetry.RehearsalObserver(script)
+        al = aligner.Aligner(script, window=5, observer=observer)
         al.align(["we", "build"])
         # Speaker stumbles on 'precision' with a close attempt 'precis'
         al.align(["precis"])

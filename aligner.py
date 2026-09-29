@@ -87,7 +87,7 @@ def _similarity(a, b):
 
 
 class Aligner:
-    def __init__(self, words, window=5, max_lookahead=25, tolerance=5):
+    def __init__(self, words, window=5, max_lookahead=25, tolerance=5, observer=None):
         self.raw_words = list(words)
         self.script = [normalize(w) for w in words]
         self.cursor = 0
@@ -95,42 +95,41 @@ class Aligner:
         self.max_lookahead = max_lookahead
         self.tolerance = tolerance
         self.streak = 0
-        self.fumbles = []
-        self.fumbled_indices = set()
-        self._new_fumbles = []
+        self.observer = observer
 
-    def _record_fumble(self, idx, reason):
-        if 0 <= idx < len(self.script) and idx not in self.fumbled_indices:
-            clean = self.script[idx]
-            if clean:
-                self.fumbled_indices.add(idx)
-                raw = self.raw_words[idx] if idx < len(self.raw_words) else clean
-                fumble_obj = {
-                    "index": idx,
-                    "word": raw,
-                    "clean": clean,
-                    "reason": reason,
-                }
-                self.fumbles.append(fumble_obj)
-                self._new_fumbles.append(fumble_obj)
+    def attach_observer(self, observer):
+        """Attach an observer for telemetry and fumble tracking."""
+        self.observer = observer
+
+    # -- Backward compatibility telemetry delegates ---------------------------
+
+    @property
+    def fumbles(self):
+        return self.observer.get_all_fumbles() if self.observer else []
 
     @property
     def has_new_fumbles(self):
-        return bool(self._new_fumbles)
+        return self.observer.has_new_fumbles if self.observer else False
 
     def get_new_fumbles(self):
-        new_items = self._new_fumbles[:]
-        self._new_fumbles.clear()
-        return new_items
+        return self.observer.get_new_fumbles() if self.observer else []
 
     def get_all_fumbles(self):
-        return list(self.fumbles)
+        return self.observer.get_all_fumbles() if self.observer else []
+
+    def _record_fumble(self, idx, reason):
+        if self.observer:
+            self.observer.record_fumble(idx, reason)
+
+    # -- Core alignment --------------------------------------------------------
 
     def seek(self, idx):
         """Manually move cursor to a specific word index and reset streak."""
         if 0 <= idx < len(self.script):
             self.cursor = idx
             self.streak = 0
+            if self.observer:
+                self.observer.on_seek(idx)
 
     @property
     def paused(self):
@@ -147,12 +146,9 @@ class Aligner:
                 i += 1
                 continue
 
-            # Check repetition / stutter against recent words in script
-            if self.cursor > 0 and len(tok) >= 3:
-                for past_idx in range(max(0, self.cursor - 5), self.cursor):
-                    if tok == self.script[past_idx]:
-                        self._record_fumble(past_idx, "repeated")
-                        break
+            # Notify observer of incoming token (e.g. for repetition/stutter detection)
+            if self.observer:
+                self.observer.on_token(tok, self.cursor)
 
             # -------------------------------------------------------------
             # Phase 1: Tight Local Window Search (0 to window-1 words ahead)
@@ -210,28 +206,28 @@ class Aligner:
 
             if best_idx is not None and best_score >= 0.50:
                 self.streak = 0
-                if best_idx > self.cursor:
-                    for skip_idx in range(self.cursor, best_idx):
-                        self._record_fumble(skip_idx, "skipped")
-                elif best_score < 0.85 and not best_compound_asr and not best_compound_script:
-                    self._record_fumble(best_idx, "stumbled")
+                cursor_before = self.cursor
+                is_compound = best_compound_asr or best_compound_script
 
                 if best_compound_asr:
+                    matched_indices = [best_idx]
                     self.cursor = best_idx + 1
                     matched.append(best_idx)
                     i += 2
-                    continue
                 elif best_compound_script:
+                    matched_indices = [best_idx, best_idx + 1]
                     self.cursor = best_idx + 2
-                    matched.append(best_idx)
-                    matched.append(best_idx + 1)
+                    matched.extend(matched_indices)
                     i += 1
-                    continue
                 else:
+                    matched_indices = [best_idx]
                     self.cursor = best_idx + 1
                     matched.append(best_idx)
                     i += 1
-                    continue
+
+                if self.observer:
+                    self.observer.on_match(matched_indices, best_score, is_compound, cursor_before)
+                continue
 
             # -------------------------------------------------------------
             # Phase 2: Forward Jump / Lookahead Recovery
@@ -249,38 +245,36 @@ class Aligner:
                         # If combined length >= 7 chars, accept 2-word sequence match
                         if total_len >= 7:
                             self.streak = 0
-                            if j > self.cursor:
-                                for skip_idx in range(self.cursor, j):
-                                    self._record_fumble(skip_idx, "skipped")
+                            cursor_before = self.cursor
+                            matched_indices = [j, j + 1]
                             self.cursor = j + 2
-                            matched.extend([j, j + 1])
+                            matched.extend(matched_indices)
                             i += 2
                             jump_matched = True
+                            if self.observer:
+                                self.observer.on_jump(matched_indices, cursor_before)
                             break
                         # For short words (e.g. "in the", "to a"), require a 3rd word
                         elif i + 2 < len(asr_words) and j + 2 < len(self.script):
                             s2 = _similarity(asr_words[i + 2], self.script[j + 2])
                             if s2 >= 0.75:
                                 self.streak = 0
-                                if j > self.cursor:
-                                    for skip_idx in range(self.cursor, j):
-                                        self._record_fumble(skip_idx, "skipped")
+                                cursor_before = self.cursor
+                                matched_indices = [j, j + 1, j + 2]
                                 self.cursor = j + 3
-                                matched.extend([j, j + 1, j + 2])
+                                matched.extend(matched_indices)
                                 i += 3
                                 jump_matched = True
+                                if self.observer:
+                                    self.observer.on_jump(matched_indices, cursor_before)
                                 break
 
             if jump_matched:
                 continue
 
-            # Check if unmatched token was an attempted pronunciation of the current expected word
-            if self.cursor < len(self.script):
-                expected = self.script[self.cursor]
-                if len(tok) >= 3 and len(expected) >= 3:
-                    sim = _similarity(tok, expected)
-                    if sim >= 0.50 or _common_prefix_len(tok, expected) >= 3:
-                        self._record_fumble(self.cursor, "stumbled")
+            # Unmatched token: notify observer to check for attempted pronunciation/stumble
+            if self.observer:
+                self.observer.on_unmatched(tok, self.cursor)
 
             # No match found: increment streak and advance ASR token
             self.streak += 1

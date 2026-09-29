@@ -274,6 +274,21 @@ class TestPrompterSession(unittest.TestCase):
         # Test invalid JSON string does not crash
         self.session.dispatch("invalid json {{{")
 
+    def test_rehearsal_observer_lifecycle_and_summary(self):
+        self.session.start_session(["alpha", "beta", "gamma"], rehearsal=True)
+        self.assertIsNotNone(self.session.rehearsal_observer)
+        self.assertEqual(self.session.rehearsal_observer.raw_words, ["alpha", "beta", "gamma"])
+
+        # Manually record fumble on observer
+        self.session.rehearsal_observer.record_fumble(1, "skipped")
+        self.assertEqual(len(self.session.rehearsal_observer.get_all_fumbles()), 1)
+
+        self.session.stop_session()
+        summary_events = [e for e in self.events if e["type"] == "rehearsal_summary"]
+        self.assertEqual(len(summary_events), 1)
+        self.assertEqual(summary_events[0]["fumbles"][0]["clean"], "beta")
+        self.assertEqual(summary_events[0]["fumbles"][0]["reason"], "skipped")
+
 
 if __name__ == "__main__":
     unittest.main()

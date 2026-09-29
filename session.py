@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import audio_capture
+import telemetry
 import transcriber
 
 
@@ -52,6 +53,7 @@ class PrompterSession:
 
         self.state = SessionState.IDLE
         self.is_rehearsal = False
+        self.rehearsal_observer: Optional[telemetry.RehearsalObserver] = None
 
         # Unified audio source
         if audio_source is not None:
@@ -212,7 +214,20 @@ class PrompterSession:
 
         self.is_rehearsal = bool(rehearsal)
         self.state = SessionState.REHEARSING if self.is_rehearsal else SessionState.RUNNING
-        self.transcriber.begin(words, is_rehearsal=self.is_rehearsal)
+
+        self.rehearsal_observer = telemetry.RehearsalObserver(
+            words,
+            on_fumble=self._on_fumble,
+        )
+
+        try:
+            self.transcriber.begin(words, is_rehearsal=self.is_rehearsal, observer=self.rehearsal_observer)
+        except TypeError:
+            self.transcriber.begin(words, is_rehearsal=self.is_rehearsal)
+
+        if hasattr(self.transcriber, "aligner") and self.transcriber.aligner is not None:
+            if hasattr(self.transcriber.aligner, "observer") and self.transcriber.aligner.observer is None:
+                self.transcriber.aligner.observer = self.rehearsal_observer
 
         self.emit({
             "type": "status",
@@ -224,7 +239,12 @@ class PrompterSession:
 
     def stop_session(self) -> None:
         """Stop tracking session and emit rehearsal/fumble summary if applicable."""
-        all_fumbles = self.transcriber.aligner.get_all_fumbles() if self.transcriber.aligner else []
+        all_fumbles = []
+        if self.rehearsal_observer is not None:
+            all_fumbles = self.rehearsal_observer.get_all_fumbles()
+        if not all_fumbles and self.transcriber and getattr(self.transcriber, "aligner", None):
+            if hasattr(self.transcriber.aligner, "get_all_fumbles"):
+                all_fumbles = self.transcriber.aligner.get_all_fumbles()
         was_rehearsal = self.is_rehearsal
 
         self.transcriber.stop()
