@@ -17,6 +17,7 @@ from websockets.datastructures import Headers
 from websockets.http11 import Response
 
 import audio_capture
+import session
 import transcriber
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -193,54 +194,21 @@ async def main(args):
     loop = asyncio.get_running_loop()
     hub = SyncHub(loop)
 
-    def _on_level(level, device):
-        hub.schedule({"type": "vu", "level": level, "device": device})
-
-    audio_source = audio_capture.AudioSource(
-        device=args.mic,
+    prompter = session.PrompterSession(
+        event_sink=hub.schedule,
+        on_config_save=save_persisted_config,
+        mic=args.mic,
         browser_audio=args.browser_audio,
-        on_level=_on_level,
-    )
-
-    def _on_sync(idx):
-        hub.schedule({"type": "sync", "word_index": idx, "state": "speaking"})
-
-    def _on_status(payload):
-        if payload.get("ready") in (True, False):
-            # One-time readiness broadcast also carries source config.
-            payload = {**payload, "browser_audio": audio_source.is_browser,
-                       "host": args.host, "port": args.port}
-        hub.schedule({"type": "status", **payload})
-
-    def _on_error(message):
-        hub.schedule({"type": "error", "message": message})
-
-    def _on_fumble(fumbles):
-        hub.schedule({"type": "fumble", "fumbles": fumbles})
-
-    # Pick profile defaults or explicit overrides
-    prof_key = args.profile if args.profile in transcriber.ENGINE_PROFILES else "fast"
-    prof = transcriber.ENGINE_PROFILES[prof_key]
-    model_name = args.model if args.model is not None else prof["model_name"]
-    tick = args.tick if args.tick is not None else prof["tick"]
-    window = args.window if args.window is not None else prof["window"]
-    beam_size = prof.get("beam_size", 1)
-
-    trans = transcriber.Transcriber(
-        audio=audio_source,
-        model_name=model_name,
+        profile=args.profile,
+        model_name=args.model,
         device=args.device,
         compute_type=args.compute_type,
-        window=window,
-        tick=tick,
-        beam_size=beam_size,
-        profile=prof_key,
+        tick=args.tick,
+        window=args.window,
         align_window=args.align_window,
         align_tolerance=args.align_tolerance,
-        on_sync=_on_sync,
-        on_status=_on_status,
-        on_error=_on_error,
-        on_fumble=_on_fumble,
+        host=args.host,
+        port=args.port,
     )
 
     async def handle_client(ws):
@@ -248,103 +216,15 @@ async def main(args):
         hub.register(out)
         sender = asyncio.create_task(_sender(ws, out))
         try:
-            await out.put(json.dumps({
-                "type": "config",
-                "browser_audio": audio_source.is_browser,
-                "profile": trans.profile,
-                "profiles": transcriber.ENGINE_PROFILES,
-                "audio_devices": audio_source.get_devices(),
-                "active_audio_device": audio_source.active_device_id,
-            }))
-            await out.put(json.dumps({
-                "type": "status",
-                "model": trans.model_name,
-                "ready": trans.is_ready,
-                "profile": trans.profile,
-                "tick": trans.tick,
-                "active_audio_device": audio_source.active_device_id,
-            }))
+            for init_msg in prompter.get_initial_messages():
+                await out.put(json.dumps(init_msg))
             async for raw in ws:
-                await handle_message(raw)
+                prompter.dispatch(raw)
         except Exception:
             pass
         finally:
             hub.unregister(out)
             sender.cancel()
-
-    async def handle_message(raw):
-        try:
-            msg = json.loads(raw)
-        except (TypeError, ValueError):
-            return
-        mtype = msg.get("type")
-        if mtype == "start":
-            device = msg.get("audio_device")
-            if device is not None:
-                audio_source.set_device(device)
-                save_persisted_config(mic=str(device))
-            words = msg.get("words") or []
-            is_rehearsal = bool(msg.get("rehearsal"))
-            if not trans.is_ready:
-                hub.schedule({"type": "error", "message": "Model still loading. Try again shortly."})
-                return
-            if not words:
-                hub.schedule({"type": "error", "message": "No transcript to run."})
-                return
-            trans.begin(words, is_rehearsal=is_rehearsal)
-            hub.schedule({
-                "type": "status",
-                "state": "running",
-                "running": True,
-                "rehearsal": is_rehearsal,
-            })
-        elif mtype == "stop":
-            all_fumbles = trans.aligner.get_all_fumbles() if trans.aligner else []
-            was_rehearsal = trans.is_rehearsal
-            trans.stop()
-            hub.schedule({
-                "type": "status",
-                "state": "stopped",
-                "running": False,
-                "rehearsal": was_rehearsal,
-            })
-            if was_rehearsal or all_fumbles:
-                hub.schedule({
-                    "type": "rehearsal_summary",
-                    "fumbles": all_fumbles,
-                })
-        elif mtype == "seek":
-            idx = msg.get("word_index")
-            if idx is not None:
-                trans.seek(int(idx))
-        elif mtype == "set_engine":
-            mode = msg.get("mode")
-            if mode and trans.set_profile(mode):
-                pass
-        elif mtype == "set_audio_device":
-            device = msg.get("device")
-            if device is not None:
-                audio_source.set_device(device)
-                save_persisted_config(mic=str(device))
-                hub.schedule({
-                    "type": "audio_device_changed",
-                    "device": audio_source.active_device_id,
-                    "is_browser": audio_source.is_browser,
-                })
-        elif mtype == "refresh_audio_devices":
-            devs = audio_source.get_devices()
-            hub.schedule({
-                "type": "config",
-                "browser_audio": audio_source.is_browser,
-                "profile": trans.profile,
-                "profiles": transcriber.ENGINE_PROFILES,
-                "audio_devices": devs,
-                "active_audio_device": audio_source.active_device_id,
-            })
-        elif mtype == "audio":
-            data = msg.get("data")
-            if data:
-                audio_source.ingest_frames(data)
 
     # Bind first: if port is in use or bind fails, background threads won't be orphaned.
     async with serve(
@@ -356,22 +236,19 @@ async def main(args):
         compression=None,
     ) as server:
         save_persisted_config(port=args.port)
-        audio_source.start()
-        trans.start_loading_async()
-        trans.start_loop()
+        prompter.start()
 
         shown = ", ".join(str(s.getsockname()) for s in server.sockets) \
             if server.sockets else f"{args.host}:{args.port}"
         print(f"Local AI Teleprompter listening on {shown}", flush=True)
         print(f"  Open http://{args.host}:{args.port} in your browser", flush=True)
-        print(f"  Mic backend: {'browser-audio (WS)' if audio_source.is_browser else 'sounddevice'}", flush=True)
-        print(f"  Profile: {trans.profile} (model={trans.model_name}, tick={trans.tick}s, compute_type={args.compute_type})", flush=True)
+        print(f"  Mic backend: {'browser-audio (WS)' if prompter.is_browser_audio else 'sounddevice'}", flush=True)
+        print(f"  Profile: {prompter.profile} (model={prompter.model_name}, tick={prompter.tick}s, compute_type={args.compute_type})", flush=True)
         print("  First run downloads the model if needed. Press Ctrl+C to stop.", flush=True)
         try:
             await asyncio.Future()
         finally:
-            trans.shutdown()
-            audio_source.stop()
+            prompter.shutdown()
 
 
 if __name__ == "__main__":
