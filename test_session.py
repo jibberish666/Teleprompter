@@ -289,6 +289,49 @@ class TestPrompterSession(unittest.TestCase):
         self.assertEqual(summary_events[0]["fumbles"][0]["clean"], "beta")
         self.assertEqual(summary_events[0]["fumbles"][0]["reason"], "skipped")
 
+    def test_on_words_alignment_and_sync_emission(self):
+        self.session.start_session(["hello", "world", "this", "is", "a", "test"])
+        self.session._on_words(["hello", "world"])
+        sync_events = [e for e in self.events if e.get("type") == "sync"]
+        self.assertEqual(len(sync_events), 2)
+        self.assertEqual(sync_events[0]["word_index"], 0)
+        self.assertEqual(sync_events[1]["word_index"], 1)
+        self.assertEqual(self.session.aligner.cursor, 2)
+
+    def test_on_words_ignored_when_stopped(self):
+        self.session.start_session(["hello", "world"])
+        self.session.stop_session()
+        event_count_before = len(self.events)
+        self.session._on_words(["hello"])
+        self.assertEqual(len(self.events), event_count_before)
+
+    def test_session_owns_aligner_directly(self):
+        self.session.start_session(["one", "two", "three"])
+        self.assertIsNotNone(self.session.aligner)
+        self.assertEqual(self.session.aligner.cursor, 0)
+        self.session.seek(2)
+        self.assertEqual(self.session.aligner.cursor, 2)
+
+    def test_patch_config_updates_and_emits(self):
+        self.session.patch_config("ui", {"box_width_pct": 77, "difficult_style": "glow"})
+        self.assertEqual(self.session.cfg["ui"]["box_width_pct"], 77)
+        self.assertEqual(self.session.cfg["ui"]["difficult_style"], "glow")
+        update_events = [e for e in self.events if e.get("type") == "config_updated"]
+        self.assertTrue(len(update_events) > 0)
+        last_evt = update_events[-1]
+        self.assertEqual(last_evt["domain"], "ui")
+        self.assertEqual(last_evt["data"]["box_width_pct"], 77)
+
+    def test_dispatch_config_patch(self):
+        self.session.dispatch(json.dumps({
+            "type": "config_patch",
+            "domain": "recording",
+            "data": {"mode": "audio", "audio_format": "wav"}
+        }))
+        self.assertEqual(self.session.cfg["recording"]["mode"], "audio")
+        self.assertEqual(self.session.cfg["recording"]["audio_format"], "wav")
+
 
 if __name__ == "__main__":
     unittest.main()
+

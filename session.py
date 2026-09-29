@@ -8,7 +8,10 @@ import json
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Union
 
+import copy
+import aligner
 import audio_capture
+import config
 import telemetry
 import transcriber
 
@@ -45,15 +48,44 @@ class PrompterSession:
         align_tolerance: int = 5,
         host: str = "127.0.0.1",
         port: int = 8000,
+        config_path: Optional[str] = None,
+        cfg: Optional[Dict[str, Any]] = None,
     ):
         self.event_sink = event_sink
         self.on_config_save = on_config_save
+        self.config_path = config_path
         self.host = host
         self.port = port
+
+        # Load or initialize unified schema
+        if cfg is not None:
+            self.cfg = config.validate_and_sanitize(cfg)
+        elif config_path:
+            self.cfg = config.load_config(config_path)
+        else:
+            self.cfg = config.get_default_config()
+
+        self.cfg["server"]["host"] = host
+        self.cfg["server"]["port"] = port
+        if mic is not None:
+            self.cfg["audio"]["device_id"] = str(mic)
+        if browser_audio:
+            self.cfg["audio"]["source_type"] = "browser"
+        if profile:
+            self.cfg["engine"]["profile"] = profile
+        if model_name:
+            self.cfg["engine"]["model"] = model_name
+        self.cfg["engine"]["compute_type"] = compute_type
+        self.cfg["engine"]["device"] = device
+        self.cfg["engine"]["align_window"] = align_window
+        self.cfg["engine"]["align_tolerance"] = align_tolerance
 
         self.state = SessionState.IDLE
         self.is_rehearsal = False
         self.rehearsal_observer: Optional[telemetry.RehearsalObserver] = None
+        self.align_window = align_window
+        self.align_tolerance = align_tolerance
+        self.aligner: Optional[aligner.Aligner] = None
 
         # Unified audio source
         if audio_source is not None:
@@ -76,6 +108,9 @@ class PrompterSession:
         # Transcriber engine
         if trans is not None:
             self.transcriber = trans
+            # If transcriber supports on_words, wire it
+            if hasattr(self.transcriber, "on_words") and self.transcriber.on_words is None:
+                self.transcriber.on_words = self._on_words
         else:
             self.transcriber = transcriber.Transcriber(
                 audio=self.audio_source,
@@ -88,6 +123,7 @@ class PrompterSession:
                 profile=prof_key,
                 align_window=align_window,
                 align_tolerance=align_tolerance,
+                on_words=self._on_words,
                 on_sync=self._on_sync,
                 on_status=self._on_status,
                 on_error=self._on_error,
@@ -126,6 +162,17 @@ class PrompterSession:
 
     def _on_fumble(self, fumbles: Any) -> None:
         self.emit({"type": "fumble", "fumbles": fumbles})
+
+    def _on_words(self, words: List[str]) -> None:
+        """Process freshly recognized words from transcriber and advance script alignment."""
+        if not words or self.aligner is None or not self.is_running:
+            return
+        matched = self.aligner.align(words)
+        if matched:
+            for idx in matched:
+                self._on_sync(idx)
+        if self.aligner.has_new_fumbles:
+            self._on_fumble(self.aligner.get_new_fumbles())
 
     # -- Lifecycle management -------------------------------------------------
 
@@ -170,6 +217,7 @@ class PrompterSession:
         """Construct current configuration for client sync."""
         return {
             "type": "config",
+            "config": copy.deepcopy(self.cfg),
             "browser_audio": self.audio_source.is_browser,
             "profile": self.transcriber.profile,
             "profiles": transcriber.ENGINE_PROFILES,
@@ -220,10 +268,21 @@ class PrompterSession:
             on_fumble=self._on_fumble,
         )
 
-        try:
-            self.transcriber.begin(words, is_rehearsal=self.is_rehearsal, observer=self.rehearsal_observer)
-        except TypeError:
-            self.transcriber.begin(words, is_rehearsal=self.is_rehearsal)
+        self.aligner = aligner.Aligner(
+            words,
+            window=self.align_window,
+            tolerance=self.align_tolerance,
+            observer=self.rehearsal_observer,
+        )
+
+        if hasattr(self.transcriber, "start"):
+            self.transcriber.start()
+
+        if hasattr(self.transcriber, "begin"):
+            try:
+                self.transcriber.begin(words, is_rehearsal=self.is_rehearsal, observer=self.rehearsal_observer)
+            except TypeError:
+                self.transcriber.begin(words, is_rehearsal=self.is_rehearsal)
 
         if hasattr(self.transcriber, "aligner") and self.transcriber.aligner is not None:
             if hasattr(self.transcriber.aligner, "observer") and self.transcriber.aligner.observer is None:
@@ -242,6 +301,8 @@ class PrompterSession:
         all_fumbles = []
         if self.rehearsal_observer is not None:
             all_fumbles = self.rehearsal_observer.get_all_fumbles()
+        if not all_fumbles and self.aligner and hasattr(self.aligner, "get_all_fumbles"):
+            all_fumbles = self.aligner.get_all_fumbles()
         if not all_fumbles and self.transcriber and getattr(self.transcriber, "aligner", None):
             if hasattr(self.transcriber.aligner, "get_all_fumbles"):
                 all_fumbles = self.transcriber.aligner.get_all_fumbles()
@@ -265,22 +326,68 @@ class PrompterSession:
 
     def seek(self, word_index: int) -> None:
         """Directly adjust current prompter script position."""
-        self.transcriber.seek(int(word_index))
+        idx = int(word_index)
+        if self.aligner is not None:
+            self.aligner.seek(idx)
+        if hasattr(self.transcriber, "seek"):
+            try:
+                self.transcriber.seek(idx)
+            except Exception:
+                pass
+
+    def patch_config(self, domain: str, patch_data: Dict[str, Any]) -> None:
+        """Apply scoped domain patch, persist to disk, and trigger runtime side effects."""
+        self.cfg, changed = config.apply_patch(self.cfg, domain, patch_data)
+        if changed:
+            if self.config_path:
+                config.save_config(self.cfg, self.config_path)
+            # Side-effects for runtime engines
+            if domain == "audio":
+                if "device_id" in patch_data and patch_data["device_id"] is not None:
+                    self.audio_source.set_device(patch_data["device_id"])
+            elif domain == "engine":
+                if "profile" in patch_data and patch_data["profile"]:
+                    self.transcriber.set_profile(patch_data["profile"])
+
+            self.emit({
+                "type": "config_updated",
+                "domain": domain,
+                "data": self.cfg.get(domain, {}),
+                "config": copy.deepcopy(self.cfg),
+            })
 
     def set_engine(self, mode: str) -> bool:
         """Dynamically switch engine profile/model."""
         if mode and self.transcriber.set_profile(mode):
+            self.cfg["engine"]["profile"] = mode
+            if self.config_path:
+                config.save_config(self.cfg, self.config_path)
+            self.emit({
+                "type": "config_updated",
+                "domain": "engine",
+                "data": self.cfg.get("engine", {}),
+                "config": copy.deepcopy(self.cfg),
+            })
             return True
         return False
 
     def set_audio_device(self, device: Union[int, str]) -> None:
         """Switch audio input device and persist choice."""
         self.audio_source.set_device(device)
+        self.cfg["audio"]["device_id"] = str(device)
+        if self.config_path:
+            config.save_config(self.cfg, self.config_path)
         if self.on_config_save:
             try:
                 self.on_config_save(mic=str(device))
             except Exception:
                 pass
+        self.emit({
+            "type": "config_updated",
+            "domain": "audio",
+            "data": self.cfg.get("audio", {}),
+            "config": copy.deepcopy(self.cfg),
+        })
         self.emit({
             "type": "audio_device_changed",
             "device": self.audio_source.active_device_id,
@@ -329,6 +436,8 @@ class PrompterSession:
             device = msg.get("device")
             if device is not None:
                 self.set_audio_device(device)
+        elif mtype == "config_patch":
+            self.patch_config(msg.get("domain") or "", msg.get("data") or {})
         elif mtype == "refresh_audio_devices":
             self.refresh_audio_devices()
         elif mtype == "audio":

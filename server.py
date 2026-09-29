@@ -17,6 +17,7 @@ from websockets.datastructures import Headers
 from websockets.http11 import Response
 
 import audio_capture
+import config
 import session
 import transcriber
 
@@ -56,24 +57,16 @@ DEFAULTS = {
 
 
 def load_persisted_config():
-    try:
-        with open(CONFIG_FILE, encoding="utf-8") as fh:
-            return json.load(fh)
-    except Exception:
-        return {}
+    return config.load_config(CONFIG_FILE)
 
 
 def save_persisted_config(port=None, mic=None):
-    cfg = load_persisted_config()
+    cfg = config.load_config(CONFIG_FILE)
     if port is not None:
-        cfg["port"] = port
+        cfg["server"]["port"] = port
     if mic is not None:
-        cfg["mic"] = mic
-    try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as fh:
-            json.dump(cfg, fh, indent=2)
-    except Exception:
-        pass
+        cfg["audio"]["device_id"] = str(mic)
+    config.save_config(cfg, CONFIG_FILE)
 
 
 def env(name, default):
@@ -83,28 +76,32 @@ def env(name, default):
 
 def build_parser():
     cfg = load_persisted_config()
+    server_cfg = cfg.get("server", {})
+    engine_cfg = cfg.get("engine", {})
+    audio_cfg = cfg.get("audio", {})
+
     parser = argparse.ArgumentParser(
         prog="teleprompter",
         description="100% local AI teleprompter server",
     )
-    parser.add_argument("--host", default=env("TELEPROMPTER_HOST", DEFAULTS["host"]))
+    parser.add_argument("--host", default=env("TELEPROMPTER_HOST", server_cfg.get("host", DEFAULTS["host"])))
     parser.add_argument(
         "--port",
         type=int,
-        default=int(env("TELEPROMPTER_PORT", cfg.get("port", DEFAULTS["port"]))),
+        default=int(env("TELEPROMPTER_PORT", server_cfg.get("port", DEFAULTS["port"]))),
     )
-    parser.add_argument("--profile", default=env("TELEPROMPTER_PROFILE", DEFAULTS["profile"]))
-    parser.add_argument("--model", default=env("TELEPROMPTER_MODEL", None))
+    parser.add_argument("--profile", default=env("TELEPROMPTER_PROFILE", engine_cfg.get("profile", DEFAULTS["profile"])))
+    parser.add_argument("--model", default=env("TELEPROMPTER_MODEL", engine_cfg.get("model", None)))
     parser.add_argument(
         "--compute-type",
-        default=env("TELEPROMPTER_COMPUTE_TYPE", DEFAULTS["compute_type"]),
+        default=env("TELEPROMPTER_COMPUTE_TYPE", engine_cfg.get("compute_type", DEFAULTS["compute_type"])),
     )
-    parser.add_argument("--device", default=env("TELEPROMPTER_DEVICE", "cpu"))
-    parser.add_argument("--mic", default=env("TELEPROMPTER_MIC", cfg.get("mic", DEFAULTS["mic"])))
+    parser.add_argument("--device", default=env("TELEPROMPTER_DEVICE", engine_cfg.get("device", "cpu")))
+    parser.add_argument("--mic", default=env("TELEPROMPTER_MIC", audio_cfg.get("device_id", DEFAULTS["mic"])))
     parser.add_argument("--tick", type=float, default=None)
     parser.add_argument("--window", type=float, default=None)
-    parser.add_argument("--align-window", type=int, default=DEFAULTS["align_window"])
-    parser.add_argument("--align-tolerance", type=int, default=DEFAULTS["align_tolerance"])
+    parser.add_argument("--align-window", type=int, default=engine_cfg.get("align_window", DEFAULTS["align_window"]))
+    parser.add_argument("--align-tolerance", type=int, default=engine_cfg.get("align_tolerance", DEFAULTS["align_tolerance"]))
     parser.add_argument(
         "--browser-audio",
         action="store_true",
@@ -197,6 +194,7 @@ async def main(args):
     prompter = session.PrompterSession(
         event_sink=hub.schedule,
         on_config_save=save_persisted_config,
+        config_path=CONFIG_FILE,
         mic=args.mic,
         browser_audio=args.browser_audio,
         profile=args.profile,

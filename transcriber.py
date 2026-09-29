@@ -56,11 +56,12 @@ class Transcriber:
         window=None,
         tick=None,
         beam_size=None,
+        on_words=None,
+        on_status=None,
+        on_error=None,
         align_window=5,
         align_tolerance=5,
         on_sync=None,
-        on_status=None,
-        on_error=None,
         on_fumble=None,
         observer=None,
     ):
@@ -77,6 +78,7 @@ class Transcriber:
         self.align_window = align_window
         self.align_tolerance = align_tolerance
 
+        self.on_words = on_words
         self.on_sync = on_sync
         self.on_status = on_status
         self.on_error = on_error
@@ -196,23 +198,28 @@ class Transcriber:
         self.loop_thread = threading.Thread(target=self._loop, daemon=True)
         self.loop_thread.start()
 
-    def begin(self, words, is_rehearsal=False, observer=None):
-        """Begin a session: reset aligner + committed anchor, run detection."""
-        eff_observer = observer if observer is not None else self.observer
-        self.aligner = aligner.Aligner(
-            words,
-            window=self.align_window,
-            tolerance=self.align_tolerance,
-            observer=eff_observer,
-        )
-        self.is_rehearsal = bool(is_rehearsal)
+    def start(self):
+        """Start or reset live transcription detection stream."""
         self.committed_abs_end = 0.0
         self.silent_ticks = 0
         self.audio.reset()
         self._running.set()
 
+    def begin(self, words=None, is_rehearsal=False, observer=None):
+        """Begin session: start live transcription (and attach legacy aligner if words supplied)."""
+        if words is not None:
+            eff_observer = observer if observer is not None else self.observer
+            self.aligner = aligner.Aligner(
+                words,
+                window=self.align_window,
+                tolerance=self.align_tolerance,
+                observer=eff_observer,
+            )
+            self.is_rehearsal = bool(is_rehearsal)
+        self.start()
+
     def seek(self, idx):
-        """Forward manual seek/jump to aligner."""
+        """Forward manual seek/jump to aligner if attached."""
         if self.aligner is not None:
             self.aligner.seek(idx)
 
@@ -294,13 +301,17 @@ class Transcriber:
                 if norm:
                     new_words.append(norm)
 
-        if not new_words or self.aligner is None:
+        if not new_words:
             return
 
-        matched = self.aligner.align(new_words)
-        if matched and self.on_sync:
-            for idx in matched:
-                self.on_sync(idx)
+        if self.on_words:
+            self.on_words(new_words)
 
-        if self.aligner.has_new_fumbles and self.on_fumble:
-            self.on_fumble(self.aligner.get_new_fumbles())
+        if self.aligner is not None:
+            matched = self.aligner.align(new_words)
+            if matched and self.on_sync:
+                for idx in matched:
+                    self.on_sync(idx)
+
+            if self.aligner.has_new_fumbles and self.on_fumble:
+                self.on_fumble(self.aligner.get_new_fumbles())

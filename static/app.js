@@ -2,12 +2,15 @@
   'use strict';
 
   // ---- Global state -------------------------------------------------------
-  let audioStream = null;
-  let videoStream = null;
-  let mediaRecorder = null;
-  let recordedChunks = [];
-  let audioContext = null;
-  let analyser = null;
+  const configStore = typeof window !== 'undefined' && window.TeleprompterConfig
+    ? window.TeleprompterConfig.createConfigStore({
+        onPatch: (domain, patchData) => {
+          send({ type: 'config_patch', domain, data: patchData });
+        }
+      })
+    : null;
+
+  const mediaSession = new TeleprompterMedia.MediaSession();
   let isPrompting = false;
   let isRehearsal = false;
 
@@ -23,8 +26,7 @@
   let modelReady = false;
   let browserAudio = false;
 
-  // Browser-audio streaming (--browser-audio fallback)
-  let captureNode = null;
+  // Browser-audio streaming state handled by mediaSession
 
   // ---- DOM elements ---------------------------------------------------------
   const videoElem = document.getElementById('camera-feed');
@@ -52,27 +54,50 @@
   const vuSource = document.getElementById('vu-source');
   const btnRefreshAudioDevices = document.getElementById('btn-refresh-audio-devices');
 
-  let autoFormatOnPaste = localStorage.getItem('teleprompter_auto_format_paste') !== 'false';
+  // MediaSession event hooks
+  mediaSession.onVuLevel = (levelPercent) => {
+    renderVuLevel(levelPercent);
+  };
+  mediaSession.onAudioChunk = (pcm16k) => {
+    if (!isPrompting || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (activeAudioSource !== 'browser') return;
+    send({ type: 'audio', data: Array.from(pcm16k) });
+  };
+  mediaSession.onDeviceChanged = (label) => {
+    if (vuSource) {
+      vuSource.textContent = label.replace(/\s*\(System Default\)\s*/i, '');
+    }
+  };
+
+  let autoFormatOnPaste = configStore
+    ? configStore.get('ui.auto_format_on_paste')
+    : (localStorage.getItem('teleprompter_auto_format_paste') !== 'false');
   if (optAutoFormatOnPaste) {
     optAutoFormatOnPaste.checked = autoFormatOnPaste;
     optAutoFormatOnPaste.addEventListener('change', (e) => {
       autoFormatOnPaste = e.target.checked;
+      if (configStore) configStore.set('ui.auto_format_on_paste', autoFormatOnPaste);
       localStorage.setItem('teleprompter_auto_format_paste', String(autoFormatOnPaste));
     });
   }
 
-  let persistTranscript = localStorage.getItem('teleprompter_persist_transcript') !== 'false';
+  let persistTranscript = configStore
+    ? configStore.get('ui.persist_transcript')
+    : (localStorage.getItem('teleprompter_persist_transcript') !== 'false');
   if (optPersistTranscript) {
     optPersistTranscript.checked = persistTranscript;
     optPersistTranscript.addEventListener('change', (e) => {
       persistTranscript = e.target.checked;
+      if (configStore) configStore.set('ui.persist_transcript', persistTranscript);
       localStorage.setItem('teleprompter_persist_transcript', String(persistTranscript));
       if (persistTranscript) {
         if (transcriptInput && transcriptInput.value) {
+          if (configStore) configStore.set('script.saved_transcript', transcriptInput.value);
           localStorage.setItem('teleprompter_saved_transcript', transcriptInput.value);
         }
         showFormatToast('Persistence enabled ✓');
       } else {
+        if (configStore) configStore.set('script.saved_transcript', '');
         localStorage.removeItem('teleprompter_saved_transcript');
         showFormatToast('Persistence disabled');
       }
@@ -82,8 +107,10 @@
   function saveTranscriptIfEnabled() {
     if (persistTranscript) {
       if (transcriptInput && transcriptInput.value && transcriptInput.value.trim()) {
+        if (configStore) configStore.set('script.saved_transcript', transcriptInput.value);
         localStorage.setItem('teleprompter_saved_transcript', transcriptInput.value);
       } else {
+        if (configStore) configStore.set('script.saved_transcript', '');
         localStorage.removeItem('teleprompter_saved_transcript');
       }
     }
@@ -107,6 +134,7 @@
       }
       transcriptInput.value = '';
       if (persistTranscript) {
+        if (configStore) configStore.set('script.saved_transcript', '');
         localStorage.removeItem('teleprompter_saved_transcript');
       }
       updateClearButtonVisibility();
@@ -118,6 +146,7 @@
 
   window.addEventListener('beforeunload', () => {
     if (persistTranscript && transcriptInput && transcriptInput.value && transcriptInput.value.trim()) {
+      if (configStore) configStore.set('script.saved_transcript', transcriptInput.value);
       localStorage.setItem('teleprompter_saved_transcript', transcriptInput.value);
     }
   });
@@ -153,8 +182,12 @@
   const optAudioSource = document.getElementById('opt-audio-source');
   const audioSourceBadge = document.getElementById('audio-source-badge');
   const audioSourceDesc = document.getElementById('audio-source-desc');
-  let activeAudioSource = localStorage.getItem('teleprompter_audio_device') || 'browser';
-  let activeAudioSourceName = localStorage.getItem('teleprompter_audio_device_name') || '';
+  let activeAudioSource = configStore
+    ? (configStore.get('audio.device_id') || (configStore.get('audio.source_type') === 'browser' ? 'browser' : 'hardware'))
+    : (localStorage.getItem('teleprompter_audio_device') || 'browser');
+  let activeAudioSourceName = configStore
+    ? (configStore.get('audio.device_name') || '')
+    : (localStorage.getItem('teleprompter_audio_device_name') || '');
   let availableAudioDevices = [];
   let analyserSource = null;
   let lastLocalLevelTime = 0;
@@ -184,12 +217,15 @@
   }
 
   if (optEngineSpeed) {
-    const savedEngine = localStorage.getItem('teleprompter_engine_speed') || 'fast';
+    const savedEngine = configStore
+      ? configStore.get('engine.profile')
+      : (localStorage.getItem('teleprompter_engine_speed') || 'fast');
     optEngineSpeed.value = savedEngine;
     updateEngineUI(savedEngine);
 
     optEngineSpeed.addEventListener('change', (e) => {
       const mode = e.target.value;
+      if (configStore) configStore.set('engine.profile', mode);
       localStorage.setItem('teleprompter_engine_speed', mode);
       updateEngineUI(mode);
       send({ type: 'set_engine', mode: mode });
@@ -199,14 +235,18 @@
   // ---- Difficult Words State & Configuration -------------------------------
   let difficultWordsList = [];
   try {
-    const savedWords = localStorage.getItem('teleprompter_difficult_words');
-    if (savedWords) difficultWordsList = JSON.parse(savedWords);
+    if (configStore && Array.isArray(configStore.get('ui.difficult_words'))) {
+      difficultWordsList = configStore.get('ui.difficult_words');
+    } else {
+      const savedWords = localStorage.getItem('teleprompter_difficult_words');
+      if (savedWords) difficultWordsList = JSON.parse(savedWords);
+    }
   } catch (_) {
     difficultWordsList = [];
   }
 
-  let difficultColor = localStorage.getItem('teleprompter_difficult_color') || '#f59e0b';
-  let difficultStyle = localStorage.getItem('teleprompter_difficult_style') || 'pill';
+  let difficultColor = configStore ? configStore.get('ui.difficult_color') : (localStorage.getItem('teleprompter_difficult_color') || '#f59e0b');
+  let difficultStyle = configStore ? configStore.get('ui.difficult_style') : (localStorage.getItem('teleprompter_difficult_style') || 'pill');
 
   let difficultWordsSet = new Set(
     difficultWordsList.map((w) => w.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '')).filter(Boolean)
@@ -215,8 +255,12 @@
   // ---- Rehearsal / Trial Fumbled Words State ------------------------------
   let rehearsalWordsList = [];
   try {
-    const savedRehearsal = localStorage.getItem('teleprompter_rehearsal_words');
-    if (savedRehearsal) rehearsalWordsList = JSON.parse(savedRehearsal);
+    if (configStore && Array.isArray(configStore.get('script.rehearsal_words'))) {
+      rehearsalWordsList = configStore.get('script.rehearsal_words');
+    } else {
+      const savedRehearsal = localStorage.getItem('teleprompter_rehearsal_words');
+      if (savedRehearsal) rehearsalWordsList = JSON.parse(savedRehearsal);
+    }
   } catch (_) {
     rehearsalWordsList = [];
   }
@@ -226,9 +270,9 @@
   );
 
   let rehearsalFilter = 'all'; // 'all' | 'skipped' | 'stumbled' | 'repeated'
-  let syncPrompterWithFilter = false;
+  let syncPrompterWithFilter = configStore ? configStore.get('ui.sync_fumble_filter') : false;
   try {
-    syncPrompterWithFilter = localStorage.getItem('teleprompter_sync_fumble_filter') === 'true';
+    if (!configStore) syncPrompterWithFilter = localStorage.getItem('teleprompter_sync_fumble_filter') === 'true';
   } catch (_) {}
 
   function updateCuesCountBadge() {
@@ -249,6 +293,9 @@
     rehearsalWordsSet = new Set(
       rehearsalWordsList.map((item) => (typeof item === 'string' ? item : item.clean || item.word).toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '')).filter(Boolean)
     );
+    if (configStore) {
+      configStore.set('script.rehearsal_words', rehearsalWordsList);
+    }
     localStorage.setItem('teleprompter_rehearsal_words', JSON.stringify(rehearsalWordsList));
     updateCuesCountBadge();
   }
@@ -381,6 +428,13 @@
     difficultWordsSet = new Set(
       difficultWordsList.map((w) => w.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '')).filter(Boolean)
     );
+    if (configStore) {
+      configStore.update('ui', {
+        difficult_words: difficultWordsList,
+        difficult_color: difficultColor,
+        difficult_style: difficultStyle
+      });
+    }
     localStorage.setItem('teleprompter_difficult_words', JSON.stringify(difficultWordsList));
     localStorage.setItem('teleprompter_difficult_color', difficultColor);
     localStorage.setItem('teleprompter_difficult_style', difficultStyle);
@@ -595,6 +649,7 @@
     checkboxFilterPrompter.checked = syncPrompterWithFilter;
     checkboxFilterPrompter.addEventListener('change', (e) => {
       syncPrompterWithFilter = e.target.checked;
+      if (configStore) configStore.set('ui.sync_fumble_filter', syncPrompterWithFilter);
       try {
         localStorage.setItem('teleprompter_sync_fumble_filter', String(syncPrompterWithFilter));
       } catch (_) {}
@@ -769,16 +824,23 @@
     { id: 'webm', label: 'WebM (.webm)', desc: 'WebM Opus compressed audio' },
   ];
 
-  let activeRecordMode = localStorage.getItem('teleprompter_record_mode') || 'video';
+  let activeRecordMode = configStore ? configStore.get('recording.mode') : (localStorage.getItem('teleprompter_record_mode') || 'video');
   if (optRecordMode) optRecordMode.value = activeRecordMode;
 
-  let activeVideoFormat = localStorage.getItem('teleprompter_video_format') || 'mp4';
-  let activeAudioFormat = localStorage.getItem('teleprompter_audio_format') || 'mp3';
+  let activeVideoFormat = configStore ? configStore.get('recording.video_format') : (localStorage.getItem('teleprompter_video_format') || 'mp4');
+  let activeAudioFormat = configStore ? configStore.get('recording.audio_format') : (localStorage.getItem('teleprompter_audio_format') || 'mp3');
   let activeRecordingOptions = { mimeType: '', extension: 'webm', format: 'webm' };
 
   function updateFormatUI() {
     const mode = optRecordMode ? optRecordMode.value : 'video';
     activeRecordMode = mode;
+    if (configStore) {
+      configStore.update('recording', {
+        mode: activeRecordMode,
+        video_format: activeVideoFormat,
+        audio_format: activeAudioFormat
+      });
+    }
     localStorage.setItem('teleprompter_record_mode', mode);
 
     if (mode === 'off') {
@@ -817,6 +879,13 @@
         activeAudioFormat = e.target.value;
         localStorage.setItem('teleprompter_audio_format', activeAudioFormat);
       }
+      if (configStore) {
+        configStore.update('recording', {
+          mode: activeRecordMode,
+          video_format: activeVideoFormat,
+          audio_format: activeAudioFormat
+        });
+      }
       const formats = mode === 'video' ? VIDEO_FORMATS : AUDIO_FORMATS;
       const chosen = formats.find((f) => f.id === e.target.value);
       if (formatDesc && chosen) formatDesc.textContent = chosen.desc;
@@ -824,158 +893,13 @@
     });
   }
 
-  // ---- Audio Encoders (WAV & MP3) ------------------------------------------
-  function audioBufferToWav(audioBuffer) {
-    const numChannels = audioBuffer.numberOfChannels;
-    const sampleRate = audioBuffer.sampleRate;
-    const format = 1; // PCM
-    const bitDepth = 16;
-    const bytesPerSample = bitDepth / 8;
-    const blockAlign = numChannels * bytesPerSample;
-    const length = audioBuffer.length;
-    const byteRate = sampleRate * blockAlign;
-    const dataSize = length * blockAlign;
-    const buffer = new ArrayBuffer(44 + dataSize);
-    const view = new DataView(buffer);
-
-    function writeString(offset, string) {
-      for (let i = 0; i < string.length; i++) {
-        view.setUint8(offset + i, string.charCodeAt(i));
-      }
-    }
-
-    writeString(0, 'RIFF');
-    view.setUint32(4, 36 + dataSize, true);
-    writeString(8, 'WAVE');
-    writeString(12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, format, true);
-    view.setUint16(22, numChannels, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, byteRate, true);
-    view.setUint16(32, blockAlign, true);
-    view.setUint16(34, bitDepth, true);
-    writeString(36, 'data');
-    view.setUint32(40, dataSize, true);
-
-    let offset = 44;
-    const channelData = [];
-    for (let ch = 0; ch < numChannels; ch++) {
-      channelData.push(audioBuffer.getChannelData(ch));
-    }
-
-    for (let i = 0; i < length; i++) {
-      for (let ch = 0; ch < numChannels; ch++) {
-        let sample = channelData[ch][i];
-        sample = Math.max(-1, Math.min(1, sample));
-        const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-        view.setInt16(offset, intSample, true);
-        offset += 2;
-      }
-    }
-
-    return new Blob([view], { type: 'audio/wav' });
-  }
-
-  function audioBufferToMp3(audioBuffer, kbps = 192) {
-    if (typeof lamejs === 'undefined') {
-      throw new Error('MP3 encoder not available.');
-    }
-    const channels = audioBuffer.numberOfChannels;
-    const sampleRate = audioBuffer.sampleRate;
-    const mp3encoder = new lamejs.Mp3Encoder(channels, sampleRate, kbps);
-    const mp3Data = [];
-    const sampleBlockSize = 1152;
-
-    function floatToInt16(floatArr) {
-      const int16 = new Int16Array(floatArr.length);
-      for (let i = 0; i < floatArr.length; i++) {
-        const s = Math.max(-1, Math.min(1, floatArr[i]));
-        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-      }
-      return int16;
-    }
-
-    if (channels === 1) {
-      const samples = floatToInt16(audioBuffer.getChannelData(0));
-      for (let i = 0; i < samples.length; i += sampleBlockSize) {
-        const chunk = samples.subarray(i, i + sampleBlockSize);
-        const mp3buf = mp3encoder.encodeBuffer(chunk);
-        if (mp3buf.length > 0) mp3Data.push(mp3buf);
-      }
-    } else {
-      const left = floatToInt16(audioBuffer.getChannelData(0));
-      const right = floatToInt16(audioBuffer.getChannelData(1));
-      for (let i = 0; i < left.length; i += sampleBlockSize) {
-        const leftChunk = left.subarray(i, i + sampleBlockSize);
-        const rightChunk = right.subarray(i, i + sampleBlockSize);
-        const mp3buf = mp3encoder.encodeBuffer(leftChunk, rightChunk);
-        if (mp3buf.length > 0) mp3Data.push(mp3buf);
-      }
-    }
-
-    const endBuf = mp3encoder.flush();
-    if (endBuf.length > 0) mp3Data.push(endBuf);
-
-    return new Blob(mp3Data, { type: 'audio/mp3' });
-  }
-
-  function getAudioRecorderOptions(targetFormat) {
-    const mimeTypes = [
-      { mime: 'audio/webm;codecs=opus', ext: 'webm' },
-      { mime: 'audio/webm', ext: 'webm' },
-      { mime: 'audio/ogg;codecs=opus', ext: 'ogg' },
-      { mime: 'audio/mp4', ext: 'm4a' },
-      { mime: 'audio/aac', ext: 'm4a' }
-    ];
-    let matchedMime = '';
-    if (window.MediaRecorder && typeof MediaRecorder.isTypeSupported === 'function') {
-      for (const item of mimeTypes) {
-        if (MediaRecorder.isTypeSupported(item.mime)) {
-          matchedMime = item.mime;
-          break;
-        }
-      }
-    }
-    const ext = targetFormat === 'wav' ? 'wav' : (targetFormat === 'mp3' ? 'mp3' : 'webm');
-    return { mimeType: matchedMime, extension: ext, format: targetFormat };
-  }
-
-  function getVideoRecorderOptions(targetFormat) {
-    if (targetFormat === 'mp4') {
-      const mp4Mimes = [
-        'video/mp4;codecs=avc1,mp4a.40.2',
-        'video/mp4;codecs=avc1,opus',
-        'video/mp4;codecs=avc1',
-        'video/mp4;codecs=h264,aac',
-        'video/mp4;codecs=h264',
-        'video/mp4'
-      ];
-      if (window.MediaRecorder && typeof MediaRecorder.isTypeSupported === 'function') {
-        for (const mime of mp4Mimes) {
-          if (MediaRecorder.isTypeSupported(mime)) {
-            return { mimeType: mime, extension: 'mp4', format: 'mp4' };
-          }
-        }
-      }
-    }
-
-    const webmMimes = [
-      'video/webm;codecs=vp9,opus',
-      'video/webm;codecs=vp8,opus',
-      'video/webm;codecs=vp9',
-      'video/webm;codecs=vp8',
-      'video/webm'
-    ];
-    if (window.MediaRecorder && typeof MediaRecorder.isTypeSupported === 'function') {
-      for (const mime of webmMimes) {
-        if (MediaRecorder.isTypeSupported(mime)) {
-          return { mimeType: mime, extension: 'webm', format: 'webm' };
-        }
-      }
-    }
-    return { mimeType: '', extension: 'webm', format: 'webm' };
-  }
+  // ---- Audio Encoders & Recorder Options (Delegated to TeleprompterMedia) ----
+  const {
+    audioBufferToWav,
+    audioBufferToMp3,
+    getAudioRecorderOptions,
+    getVideoRecorderOptions
+  } = TeleprompterMedia;
 
   function updateStopButtonText() {
     if (isRehearsal) {
@@ -1029,18 +953,28 @@
     switch (msg.type) {
       case 'config':
         browserAudio = !!msg.browser_audio;
+        if (msg.config && configStore) {
+          configStore.reconcileServerConfig(msg.config);
+        }
         if (msg.profile) {
-          const saved = localStorage.getItem('teleprompter_engine_speed');
+          const saved = configStore ? configStore.get('engine.profile') : localStorage.getItem('teleprompter_engine_speed');
           if (!saved) updateEngineUI(msg.profile);
         }
         if (msg.audio_devices) {
-          const savedDev = localStorage.getItem('teleprompter_audio_device');
+          const savedDev = configStore ? configStore.get('audio.device_id') : localStorage.getItem('teleprompter_audio_device');
           const activeDev = savedDev || (msg.browser_audio ? 'browser' : msg.active_audio_device) || 'browser';
           updateAudioSourceUI(activeDev, msg.audio_devices);
           const matchedDev = (msg.audio_devices || []).find((d) => String(d.id) === String(activeDev));
           const targetName = matchedDev ? (matchedDev.raw_name || matchedDev.name) : activeAudioSourceName;
           if (targetName) {
             activeAudioSourceName = targetName;
+            if (configStore) {
+              configStore.update('audio', {
+                source_type: activeDev === 'browser' ? 'browser' : 'hardware',
+                device_id: activeDev === 'browser' ? null : String(activeDev),
+                device_name: targetName
+              });
+            }
             localStorage.setItem('teleprompter_audio_device_name', targetName);
             switchBrowserAudio(targetName);
           }
@@ -1049,10 +983,20 @@
           }
         }
         if (activeAudioSource === 'browser' && isPrompting) {
-          if (audioContext && audioContext.state === 'suspended') {
-            audioContext.resume().then(() => startBrowserAudioStream()).catch(() => {});
-          } else {
-            startBrowserAudioStream();
+          mediaSession.ensureAudioContext().then(() => startBrowserAudioStream()).catch(() => {});
+        }
+        break;
+      case 'config_updated':
+        if (msg.config && configStore) {
+          configStore.reconcileServerConfig(msg.config);
+        }
+        if (msg.domain === 'ui' && msg.data) {
+          if (msg.data.box_width_pct !== undefined && optBoxWidth) {
+            const widthVal = msg.data.box_width_pct;
+            optBoxWidth.value = widthVal;
+            prompterBox.style.width = `${widthVal}%`;
+            prompterBox.style.maxWidth = `${widthVal}%`;
+            if (valBoxWidth) valBoxWidth.textContent = `${widthVal}%`;
           }
         }
         break;
@@ -1234,108 +1178,12 @@
     }
   }
 
-  function startVuLoop() {
-    if (vuLoopStarted) return;
-    vuLoopStarted = true;
-    const dataArray = new Uint8Array(128);
-
-    function processLocalAudio() {
-      if (analyser) {
-        analyser.getByteFrequencyData(dataArray);
-        let sum = 0;
-        for (let i = 2; i < 30; i++) sum += dataArray[i];
-        const average = sum / 28;
-        // Sensitivity scaling: 96 rather than 128 provides healthy response for studio/dynamic mics
-        const levelPercent = Math.min(100, Math.round((average / 96) * 100));
-        if (levelPercent > 0) {
-          lastLocalLevelTime = Date.now();
-          renderVuLevel(levelPercent);
-        } else if (Date.now() - lastLocalLevelTime > 300) {
-          renderVuLevel(0);
-        }
-      }
-      requestAnimationFrame(processLocalAudio);
-    }
-    processLocalAudio();
-  }
-
   async function switchBrowserAudio(preferredName) {
     try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
-
-      if (!audioContext) {
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      if (audioContext.state === 'suspended') {
-        audioContext.resume().catch(() => {});
-      }
-
-      // Enumerate browser audio devices
-      let devices = await navigator.mediaDevices.enumerateDevices();
-      let audioInputs = devices.filter((d) => d.kind === 'audioinput');
-
-      // If devices lack labels (initial permission needed), request quick permission to read labels
-      if (audioInputs.length > 0 && !audioInputs.some((d) => d.label)) {
-        try {
-          const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          tempStream.getTracks().forEach((t) => t.stop());
-          devices = await navigator.mediaDevices.enumerateDevices();
-          audioInputs = devices.filter((d) => d.kind === 'audioinput');
-        } catch (_) {}
-      }
-
-      let matchedDeviceId = null;
-      let matchedLabel = '';
-      if (preferredName && preferredName !== 'browser') {
-        const cleanTarget = preferredName.toLowerCase().replace(/\s*\(system default\)\s*/i, '').trim();
-        const matched = audioInputs.find((d) => {
-          const lbl = (d.label || '').toLowerCase();
-          return lbl && (lbl.includes(cleanTarget) || cleanTarget.includes(lbl));
-        });
-        if (matched) {
-          matchedDeviceId = matched.deviceId;
-          matchedLabel = matched.label;
-        }
-      }
-
-      const isExternal = preferredName && !preferredName.toLowerCase().includes('macbook') && preferredName !== 'browser';
-      const constraints = {
-        audio: matchedDeviceId ? {
-          deviceId: { exact: matchedDeviceId },
-          echoCancellation: !isExternal,
-          noiseSuppression: !isExternal,
-          autoGainControl: !isExternal,
-        } : {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        }
-      };
-
-      if (audioStream) {
-        audioStream.getTracks().forEach((t) => t.stop());
-      }
-
-      audioStream = await navigator.mediaDevices.getUserMedia(constraints);
-      const activeTrack = audioStream.getAudioTracks()[0];
-      const activeLabel = (activeTrack && activeTrack.label) ? activeTrack.label : (matchedLabel || preferredName || 'Microphone');
-
-      if (vuSource) {
+      const activeLabel = await mediaSession.switchAudioDevice(preferredName);
+      if (activeLabel && vuSource) {
         vuSource.textContent = activeLabel.replace(/\s*\(System Default\)\s*/i, '');
       }
-
-      if (analyserSource) {
-        try { analyserSource.disconnect(); } catch (_) {}
-      }
-      if (!analyser) {
-        analyser = audioContext.createAnalyser();
-        analyser.fftSize = 256;
-      }
-      analyserSource = audioContext.createMediaStreamSource(audioStream);
-      analyserSource.connect(analyser);
-
-      startVuLoop();
-
       if (activeAudioSource === 'browser' && isPrompting) {
         stopBrowserAudioStream();
         startBrowserAudioStream();
@@ -1346,17 +1194,15 @@
   }
 
   async function initAudio() {
-    if (audioStream && audioStream.active) return;
     const target = activeAudioSourceName || (activeAudioSource !== 'browser' ? activeAudioSource : null);
-    await switchBrowserAudio(target);
+    await mediaSession.initAudio(target);
   }
 
   // Resume AudioContext and ensure audio init on any initial user interaction
   const resumeAudioOnGesture = () => {
-    if (!audioStream) {
+    mediaSession.ensureAudioContext();
+    if (!mediaSession.audioStream) {
       initAudio();
-    } else if (audioContext && audioContext.state === 'suspended') {
-      audioContext.resume().catch(() => {});
     }
   };
   ['click', 'keydown', 'pointerdown', 'touchstart'].forEach((evt) => {
@@ -1366,26 +1212,14 @@
   // ---- Camera controls & stream lifecycle -----------------------------------
   async function startCamera() {
     try {
-      stopCamera();
-      videoStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
-      });
-      videoElem.srcObject = videoStream;
-      videoElem.classList.remove('hidden');
+      await mediaSession.startCamera(videoElem);
     } catch (err) {
       alert('Camera access error: ' + err.message);
     }
   }
 
   function stopCamera() {
-    if (videoStream) {
-      videoStream.getTracks().forEach((t) => t.stop());
-      videoStream = null;
-    }
-    if (videoElem.srcObject) {
-      videoElem.srcObject = null;
-    }
-    videoElem.classList.add('hidden');
+    mediaSession.stopCamera(videoElem);
   }
 
   async function initCameraAndAudio() {
@@ -1400,50 +1234,13 @@
 
   // ---- Browser-audio streaming (WebRTC audio to WebSocket) ------------------
   function startBrowserAudioStream() {
-    if (captureNode || !audioContext || !audioStream) return;
     if (activeAudioSource !== 'browser') return;
-    try {
-      if (audioContext.state === 'suspended') {
-        audioContext.resume().catch((err) => console.warn('AudioContext resume failed:', err));
-      }
-      const source = audioContext.createMediaStreamSource(audioStream);
-      captureNode = audioContext.createScriptProcessor(4096, 1, 1);
-      const silent = audioContext.createGain();
-      silent.gain.value = 0;
-      source.connect(captureNode);
-      captureNode.connect(silent);
-      silent.connect(audioContext.destination);
-
-      captureNode.onaudioprocess = (e) => {
-        if (!isPrompting || !ws || ws.readyState !== WebSocket.OPEN) return;
-        if (activeAudioSource !== 'browser') return;
-        const raw = e.inputBuffer.getChannelData(0);
-        const ratio = audioContext.sampleRate / 16000;
-        const outLen = Math.floor(raw.length / ratio);
-        if (outLen < 1) return;
-        const out = new Float32Array(outLen);
-        for (let i = 0; i < outLen; i++) {
-          const srcPos = i * ratio;
-          const idx0 = Math.floor(srcPos);
-          const idx1 = Math.min(raw.length - 1, idx0 + 1);
-          const frac = srcPos - idx0;
-          out[i] = raw[idx0] * (1 - frac) + raw[idx1] * frac;
-        }
-        send({ type: 'audio', data: Array.from(out) });
-      };
-      send({ type: 'set_audio_device', device: 'browser' });
-    } catch (err) {
-      console.error('Error initializing browser audio stream:', err);
-    }
+    mediaSession.startStreaming();
+    send({ type: 'set_audio_device', device: 'browser' });
   }
 
   function stopBrowserAudioStream() {
-    if (captureNode) {
-      try {
-        captureNode.disconnect();
-      } catch (_) { }
-      captureNode = null;
-    }
+    mediaSession.stopStreaming();
   }
 
   // ---- Camera controls --------------------------------------------------------
@@ -1487,6 +1284,7 @@
       prompterBox.style.width = `${widthVal}%`;
       prompterBox.style.maxWidth = `${widthVal}%`;
       if (valBoxWidth) valBoxWidth.textContent = `${widthVal}%`;
+      if (configStore) configStore.set('ui.box_width_pct', widthVal);
       localStorage.setItem('teleprompter_box_width_pct', String(widthVal));
     });
   }
@@ -1521,249 +1319,12 @@
 
   // ---- Automatic Teleprompter Script Phrasing & Formatting -----------------
   function formatScriptForPrompter(text) {
-    if (!text || !text.trim()) return '';
-
-    // 1. Strip non-spoken script cues, stage directions, and parentheticals
-    let cleaned = text
-      // Bracketed cues: [CAMERA 1], [PAUSE], [SLIDE 2], etc.
-      .replace(/\[[^\]]*\]/g, ' ')
-      // Common stage direction parentheticals: (pause), (smiling), (laughs), etc.
-      .replace(/\((?:pause|smiling|smilingly|laughs?|laughter|sighs?|giggles?|clears throat|beat|applause|music|whispers?|fade in|fade out|cut to)[^)]*\)/gi, ' ')
-      // Speaker tags at start of lines: "HOST:", "SPEAKER 1:", etc.
-      .replace(/^[A-Z0-9\s_-]{2,25}:\s*/gm, '');
-
-    const PREPOSITIONS = new Set([
-      'in', 'on', 'at', 'to', 'for', 'with', 'by', 'from', 'of', 'into',
-      'through', 'across', 'about', 'as', 'over', 'under', 'between',
-      'after', 'before', 'during', 'without', 'against', 'among', 'via',
-      'toward', 'towards', 'upon'
-    ]);
-
-    const CONJUNCTIONS = new Set([
-      'and', 'or', 'but', 'nor', 'so', 'yet', 'because', 'although',
-      'since', 'while', 'where', 'if', 'that', 'unless', 'until', 'whether'
-    ]);
-
-    const ARTICLES_AND_DETERMINERS = new Set([
-      'a', 'an', 'the', 'this', 'that', 'these', 'those', 'my', 'your',
-      'his', 'her', 'its', 'our', 'their'
-    ]);
-
-    const DANGLING_WORDS = new Set([
-      ...PREPOSITIONS,
-      ...CONJUNCTIONS,
-      ...ARTICLES_AND_DETERMINERS,
-      'which', 'who', 'whom', 'whose'
-    ]);
-
-    // Key compound technical terms and noun phrases that must remain intact on a single line
-    const PROTECTED_TERMS = [
-      'Turbo Technics VTR100 EVO',
-      'Turbo Technics VSR3',
-      'Turbo Technics',
-      'VTR100 EVO',
-      'variable geometry turbochargers',
-      'variable geometry turbocharger',
-      'proven flow measurement technology',
-      'flow measurement technology',
-      'passenger car and light commercial vehicle applications',
-      'passenger cars and light commercial vehicles',
-      'passenger car and light commercial vehicles',
-      'light commercial vehicle applications',
-      'light commercial vehicles',
-      'enhanced actuator control',
-      'actuator control',
-      'aftermarket repair',
-      'exhaust gas recirculation systems',
-      'exhaust gas recirculation',
-      'internal combustion engines',
-      'internal combustion engine',
-      'customer engagement in real time',
-      'customer engagement',
-      'real time'
-    ];
-
-    // Clean raw paragraphs (preserve deliberate empty lines)
-    const rawParagraphs = cleaned.split(/\r?\n\s*\r?\n/);
-    const formattedSections = [];
-
-    for (const para of rawParagraphs) {
-      const trimmedPara = para.replace(/\s+/g, ' ').trim();
-      if (!trimmedPara) continue;
-
-      // Split on full sentence boundaries (. ! ? ;)
-      const sentenceRegex = /([.!?]+)(?:\s+|$)/g;
-      const sentences = [];
-      let lastIndex = 0;
-      let match;
-
-      while ((match = sentenceRegex.exec(trimmedPara)) !== null) {
-        const sentenceText = trimmedPara.slice(lastIndex, match.index + match[1].length).trim();
-        if (sentenceText) sentences.push(sentenceText);
-        lastIndex = match.index + match[0].length;
-      }
-      if (lastIndex < trimmedPara.length) {
-        const rem = trimmedPara.slice(lastIndex).trim();
-        if (rem) sentences.push(rem);
-      }
-
-      const paraOutputLines = [];
-
-      for (let sIdx = 0; sIdx < sentences.length; sIdx++) {
-        const sentence = sentences[sIdx];
-        const sentenceLines = formatSentence(sentence);
-
-        if (paraOutputLines.length > 0 && sentenceLines.length > 0) {
-          // Visual breath pause line between distinct sentences
-          paraOutputLines.push('');
-        }
-
-        paraOutputLines.push(...sentenceLines);
-      }
-
-      formattedSections.push(paraOutputLines.join('\n'));
+    if (typeof TeleprompterFormatter !== 'undefined') {
+      return TeleprompterFormatter.formatScript(text);
     }
-
-    return formattedSections.join('\n\n');
-
-    function formatSentence(sentence) {
-      const rawWords = sentence.split(/\s+/).filter(Boolean);
-      if (rawWords.length <= 8) {
-        return [rawWords.join(' ')];
-      }
-
-      // Step 1: Identify protected multi-word phrase ranges [start, end]
-      const protectedRanges = [];
-      for (const phrase of PROTECTED_TERMS) {
-        const pWords = phrase.split(' ');
-        for (let i = 0; i <= rawWords.length - pWords.length; i++) {
-          let matches = true;
-          for (let p = 0; p < pWords.length; p++) {
-            const wClean = rawWords[i + p].toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
-            if (wClean !== pWords[p].toLowerCase()) {
-              matches = false;
-              break;
-            }
-          }
-          if (matches) {
-            protectedRanges.push({ start: i, end: i + pWords.length });
-          }
-        }
-      }
-
-      // Automatically protect capitalized proper noun clusters (2 to 6 words)
-      for (let i = 0; i < rawWords.length; i++) {
-        if (/^[A-Z0-9]/.test(rawWords[i])) {
-          let j = i + 1;
-          while (j < rawWords.length && /^[A-Z0-9]/.test(rawWords[j])) {
-            j++;
-          }
-          if (j - i >= 2 && j - i <= 6) {
-            protectedRanges.push({ start: i, end: j });
-          }
-        }
-      }
-
-      function splitsProtected(idx) {
-        for (const r of protectedRanges) {
-          if (idx > r.start && idx < r.end) return true;
-        }
-        return false;
-      }
-
-      // Step 2: Dynamic programming to find optimal spoken-cadence line breaks (target 5-8 words)
-      const n = rawWords.length;
-      const dp = new Array(n + 1).fill(null).map(() => ({ cost: Infinity, prev: -1 }));
-      dp[0] = { cost: 0, prev: -1 };
-
-      for (let i = 0; i < n; i++) {
-        if (dp[i].cost === Infinity) continue;
-
-        for (let j = i + 1; j <= n; j++) {
-          const wordCount = j - i;
-          if (wordCount > 8) break; // Hard upper ceiling of 8 words per teleprompter line
-
-          // Never break inside a protected multi-word phrase
-          if (j < n && splitsProtected(j)) continue;
-
-          const lastWord = rawWords[j - 1];
-          const cleanLast = lastWord.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
-          const isDangling = j < n && DANGLING_WORDS.has(cleanLast);
-
-          let cost = 0;
-          // Word count scoring: strong target between 5 and 8 words
-          if (wordCount >= 5 && wordCount <= 8) {
-            if (wordCount === 6 || wordCount === 7) cost += 0;
-            else if (wordCount === 5 || wordCount === 8) cost += 2;
-          } else if (wordCount === 4) {
-            cost += 80;
-          } else if (wordCount === 3) {
-            cost += 200;
-          } else if (wordCount <= 2) {
-            cost += 500;
-          }
-
-          // Dangling word penalty: heavily avoid ending lines with prepositions, conjunctions, or determiners
-          if (isDangling) {
-            cost += 1000;
-          }
-
-          // Punctuation break bonus (commas, semicolons, colons)
-          if (lastWord.endsWith(',') || lastWord.endsWith(';') || lastWord.endsWith(':')) {
-            cost -= 15;
-          }
-
-          // Forward momentum bonus: start next line with conjunction or preposition
-          if (j < n) {
-            const nextFirst = rawWords[j].toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
-            if (CONJUNCTIONS.has(nextFirst)) {
-              cost -= 8;
-            } else if (PREPOSITIONS.has(nextFirst)) {
-              cost -= 5;
-            }
-          }
-
-          const totalCost = dp[i].cost + cost;
-          if (totalCost < dp[j].cost) {
-            dp[j] = { cost: totalCost, prev: i };
-          }
-        }
-      }
-
-      // Backtrack optimal line breaks
-      const rawLines = [];
-      let curr = n;
-      while (curr > 0) {
-        const prev = dp[curr].prev;
-        if (prev === -1) {
-          rawLines.unshift(rawWords.slice(0, curr).join(' '));
-          break;
-        }
-        rawLines.unshift(rawWords.slice(prev, curr).join(' '));
-        curr = prev;
-      }
-
-      // Step 3: Insert visual breath pauses at major clause boundaries within long sentences (>= 20 words)
-      const outputLines = [];
-      let wordsSinceBreath = 0;
-      for (let l = 0; l < rawLines.length; l++) {
-        const line = rawLines[l];
-        const count = line.split(/\s+/).length;
-        outputLines.push(line);
-        wordsSinceBreath += count;
-
-        const endsWithComma = line.endsWith(',') || line.endsWith(';') || line.endsWith(':');
-        const remainingWords = rawLines.slice(l + 1).reduce((acc, str) => acc + str.split(/\s+/).length, 0);
-
-        if (endsWithComma && wordsSinceBreath >= 14 && remainingWords >= 10 && l < rawLines.length - 1) {
-          outputLines.push(''); // Visual breathing pause
-          wordsSinceBreath = 0;
-        }
-      }
-
-      return outputLines;
-    }
+    return text;
   }
+
 
   // ---- Auto-Format button & Paste handling -----------------------------------
   if (btnAutoFormat) {
@@ -1855,68 +1416,13 @@
       return;
     }
 
-    linesData = [];
-    allWords = [];
-    let globalWordIdx = 0;
-
-    // Check if input consists of continuous long paragraphs with lines exceeding 8 words
-    // If so, automatically format for optimal teleprompter phrasing
-    const inputLines = rawText.split(/\r\n|\r|\n/).map((s) => s.trim()).filter(Boolean);
-    const hasUnbrokenLongLines = inputLines.some((l) => l.split(/\s+/).length > 8);
-    const effectiveText = (inputLines.length <= 3 && hasUnbrokenLongLines)
-      ? formatScriptForPrompter(rawText)
-      : rawText;
-
-    // Split input by newlines to respect carriage returns / paragraph / section breaks
-    const rawLines = effectiveText.split(/\r\n|\r|\n/);
-    let prevWasBlank = false;
-
-    for (let l = 0; l < rawLines.length; l++) {
-      const trimmedLine = rawLines[l].trim();
-
-      if (!trimmedLine) {
-        // Blank line: represents a breath pause or section break
-        if (!prevWasBlank && linesData.length > 0) {
-          linesData.push({ lineIdx: linesData.length, words: [], isBlank: true });
-          prevWasBlank = true;
-        }
-        continue;
-      }
-
-      prevWasBlank = false;
-      const lineWords = trimmedLine.split(/\s+/).filter(Boolean);
-      if (lineWords.length === 0) continue;
-
-      // If a line is still over 8 words, format it with rhythmic phrasing
-      const lineChunks = lineWords.length > 8
-        ? formatScriptForPrompter(trimmedLine).split(/\r\n|\r|\n/).map((s) => s.trim())
-        : [trimmedLine];
-
-      for (const chunk of lineChunks) {
-        if (!chunk) {
-          if (!prevWasBlank && linesData.length > 0) {
-            linesData.push({ lineIdx: linesData.length, words: [], isBlank: true });
-            prevWasBlank = true;
-          }
-          continue;
-        }
-        prevWasBlank = false;
-        const chunkWords = chunk.split(/\s+/).filter(Boolean);
-        if (chunkWords.length === 0) continue;
-        const lineObj = { lineIdx: linesData.length, words: [], isBlank: false };
-        chunkWords.forEach((wordStr) => {
-          const wObj = { globalIdx: globalWordIdx, lineIdx: lineObj.lineIdx, original: wordStr };
-          lineObj.words.push(wObj);
-          allWords.push(wObj);
-          globalWordIdx++;
-        });
-        linesData.push(lineObj);
-      }
-    }
-
-    // Remove any trailing blank lines
-    while (linesData.length > 0 && linesData[linesData.length - 1].isBlank) {
-      linesData.pop();
+    if (typeof TeleprompterFormatter !== 'undefined') {
+      const tokenResult = TeleprompterFormatter.parseTokens(rawText);
+      linesData = tokenResult.lines;
+      allWords = tokenResult.allWords;
+    } else {
+      linesData = [];
+      allWords = [];
     }
 
     if (linesData.length === 0 || allWords.length === 0) {
@@ -2018,22 +1524,15 @@
       if (optRecordMode) optRecordMode.disabled = true;
       if (optRecordFormat) optRecordFormat.disabled = true;
 
-      if (!audioStream || !audioStream.active || !audioStream.getAudioTracks().some((t) => t.readyState === 'live')) {
+      if (!mediaSession.audioStream || !mediaSession.audioStream.active || !mediaSession.audioStream.getAudioTracks().some((t) => t.readyState === 'live')) {
         await initAudio();
       }
-      if (audioContext && audioContext.state === 'suspended') {
-        try {
-          await audioContext.resume();
-        } catch (err) {
-          console.warn('AudioContext resume error:', err);
-        }
-      }
+      await mediaSession.ensureAudioContext();
 
       if (activeAudioSource === 'browser') {
         startBrowserAudioStream();
       }
 
-      mediaRecorder = null;
       recIndicator.classList.add('hidden');
 
       send({ type: 'start', words: allWords.map((w) => w.original), rehearsal: true, wpm: 140, audio_device: activeAudioSource });
@@ -2063,16 +1562,10 @@
     if (optRecordMode) optRecordMode.disabled = true;
     if (optRecordFormat) optRecordFormat.disabled = true;
 
-    if (!audioStream || !audioStream.active || !audioStream.getAudioTracks().some((t) => t.readyState === 'live')) {
+    if (!mediaSession.audioStream || !mediaSession.audioStream.active || !mediaSession.audioStream.getAudioTracks().some((t) => t.readyState === 'live')) {
       await initAudio();
     }
-    if (audioContext && audioContext.state === 'suspended') {
-      try {
-        await audioContext.resume();
-      } catch (err) {
-        console.warn('AudioContext resume error:', err);
-      }
-    }
+    await mediaSession.ensureAudioContext();
 
     if (activeAudioSource === 'browser') {
       startBrowserAudioStream();
@@ -2080,42 +1573,17 @@
 
     if (activeRecordMode !== 'off') {
       try {
-        if (!audioStream || !audioStream.getAudioTracks().some((t) => t.readyState === 'live')) {
-          await switchBrowserAudio(activeAudioSourceName);
-        }
-        const tracksToRecord = [];
-        if (activeRecordMode === 'video' && videoStream) {
-          tracksToRecord.push(...videoStream.getVideoTracks().filter((t) => t.readyState === 'live'));
-        }
-        if (audioStream) {
-          tracksToRecord.push(...audioStream.getAudioTracks().filter((t) => t.readyState === 'live'));
-        }
-
-        if (tracksToRecord.length > 0) {
-          const hasVideoTrack = tracksToRecord.some((t) => t.kind === 'video');
-          if (activeRecordMode === 'audio' || !hasVideoTrack) {
-            activeRecordingOptions = getAudioRecorderOptions(activeAudioFormat);
-          } else {
-            activeRecordingOptions = getVideoRecorderOptions(activeVideoFormat);
-          }
-
-          const streamToRecord = new MediaStream(tracksToRecord);
-          const recorderOpts = activeRecordingOptions.mimeType ? { mimeType: activeRecordingOptions.mimeType } : {};
-          mediaRecorder = new MediaRecorder(streamToRecord, recorderOpts);
-          mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
-          mediaRecorder.start(1000);
-          recIndicator.classList.remove('hidden');
-        } else {
-          mediaRecorder = null;
-          recIndicator.classList.add('hidden');
-        }
+        await mediaSession.startRecording({
+          mode: activeRecordMode,
+          audioFormat: activeAudioFormat,
+          videoFormat: activeVideoFormat
+        });
+        recIndicator.classList.remove('hidden');
       } catch (_) {
         speechHud.textContent = 'Recording unavailable – running sync-only.';
-        mediaRecorder = null;
         recIndicator.classList.add('hidden');
       }
     } else {
-      mediaRecorder = null;
       recIndicator.classList.add('hidden');
     }
 
@@ -2139,76 +1607,32 @@
 
     send({ type: 'stop' });
 
-    if (activeRecordMode !== 'off' && mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.onstop = async () => {
-        function getRecordingFilename(extension) {
-          const prefix = activeRecordMode === 'audio' ? 'Teleprompter-Audio' : 'Teleprompter-Session';
-          const now = new Date();
-          const pad = (n) => String(n).padStart(2, '0');
-          const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
-          return `${prefix}-${dateStr}.${extension}`;
-        }
+    if (activeRecordMode !== 'off' && mediaSession.mediaRecorder && mediaSession.mediaRecorder.state !== 'inactive') {
+      mediaSession.stopRecording((msg) => {
+        setBadge(vadStatus, 'ENCODING…', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
+        speechHud.textContent = msg;
+      }).then((result) => {
+        if (!result) return;
+        const { blob, extension, filename } = result;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          document.body.removeChild(a);
+          window.URL.revokeObjectURL(url);
+        }, 150);
 
-        try {
-          const recordedBlob = new Blob(recordedChunks, { type: activeRecordingOptions.mimeType || 'audio/webm' });
-          let finalBlob = recordedBlob;
-          let finalExtension = activeRecordingOptions.extension;
-
-          // Convert to WAV or MP3 for audio if selected
-          if (activeRecordMode === 'audio' && (activeAudioFormat === 'wav' || activeAudioFormat === 'mp3')) {
-            setBadge(vadStatus, 'ENCODING…', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
-            speechHud.textContent = `Processing ${activeAudioFormat.toUpperCase()} audio…`;
-
-            const arrayBuffer = await recordedBlob.arrayBuffer();
-            const decodeContext = new (window.AudioContext || window.webkitAudioContext)();
-            const audioBuffer = await decodeContext.decodeAudioData(arrayBuffer);
-
-            if (activeAudioFormat === 'wav') {
-              finalBlob = audioBufferToWav(audioBuffer);
-              finalExtension = 'wav';
-            } else if (activeAudioFormat === 'mp3') {
-              finalBlob = audioBufferToMp3(audioBuffer, 192);
-              finalExtension = 'mp3';
-            }
-            try { decodeContext.close(); } catch (_) { }
-          }
-
-          const url = URL.createObjectURL(finalBlob);
-          const a = document.createElement('a');
-          a.style.display = 'none';
-          a.href = url;
-          a.download = getRecordingFilename(finalExtension);
-          document.body.appendChild(a);
-          a.click();
-          setTimeout(() => {
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-          }, 150);
-
-          setBadge(vadStatus, 'SAVED', 'bg-green-950 text-green-400 border-green-500/30');
-          speechHud.textContent = activeRecordMode === 'audio'
-            ? `Session audio saved (${finalExtension.toUpperCase()})!`
-            : `Session video saved (${finalExtension.toUpperCase()})!`;
-        } catch (err) {
-          console.error('Error processing audio recording:', err);
-          // Fallback to saving raw blob directly
-          const fallbackBlob = new Blob(recordedChunks, { type: activeRecordingOptions.mimeType || 'audio/webm' });
-          const url = URL.createObjectURL(fallbackBlob);
-          const a = document.createElement('a');
-          a.style.display = 'none';
-          a.href = url;
-          a.download = getRecordingFilename(activeRecordingOptions.extension);
-          document.body.appendChild(a);
-          a.click();
-          setTimeout(() => {
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-          }, 150);
-          setBadge(vadStatus, 'SAVED', 'bg-green-950 text-green-400 border-green-500/30');
-          speechHud.textContent = 'Session saved!';
-        }
-      };
-      mediaRecorder.stop();
+        setBadge(vadStatus, 'SAVED', 'bg-green-950 text-green-400 border-green-500/30');
+        speechHud.textContent = activeRecordMode === 'audio'
+          ? `Session audio saved (${extension.toUpperCase()})!`
+          : `Session video saved (${extension.toUpperCase()})!`;
+      }).catch((err) => {
+        console.error('Error saving recording:', err);
+      });
     } else {
       if (isRehearsal) {
         setBadge(vadStatus, 'REHEARSAL COMPLETE', 'bg-emerald-950 text-emerald-400 border-emerald-500/30');
@@ -2286,15 +1710,15 @@
     currentLineHeight = getLineHeightForFontSize(initialFontSize);
   }
   if (optBoxWidth) {
-    const savedBoxWidth = localStorage.getItem('teleprompter_box_width_pct');
-    const widthToApply = savedBoxWidth ? parseInt(savedBoxWidth, 10) : 90;
+    const savedBoxWidth = configStore ? configStore.get('ui.box_width_pct') : localStorage.getItem('teleprompter_box_width_pct');
+    const widthToApply = savedBoxWidth ? parseInt(savedBoxWidth, 10) : 68;
     optBoxWidth.value = widthToApply;
     prompterBox.style.width = `${widthToApply}%`;
     prompterBox.style.maxWidth = `${widthToApply}%`;
     if (valBoxWidth) valBoxWidth.textContent = `${widthToApply}%`;
   }
   if (persistTranscript) {
-    const savedTranscript = localStorage.getItem('teleprompter_saved_transcript');
+    const savedTranscript = configStore ? configStore.get('script.saved_transcript') : localStorage.getItem('teleprompter_saved_transcript');
     if (savedTranscript && (!transcriptInput.value || !transcriptInput.value.trim())) {
       transcriptInput.value = savedTranscript;
     }
