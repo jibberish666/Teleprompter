@@ -49,6 +49,8 @@
   const recIndicator = document.getElementById('rec-indicator');
   const vuBar = document.getElementById('vu-bar');
   const vuText = document.getElementById('vu-text');
+  const vuSource = document.getElementById('vu-source');
+  const btnRefreshAudioDevices = document.getElementById('btn-refresh-audio-devices');
 
   let autoFormatOnPaste = localStorage.getItem('teleprompter_auto_format_paste') !== 'false';
   if (optAutoFormatOnPaste) {
@@ -152,7 +154,10 @@
   const audioSourceBadge = document.getElementById('audio-source-badge');
   const audioSourceDesc = document.getElementById('audio-source-desc');
   let activeAudioSource = localStorage.getItem('teleprompter_audio_device') || 'browser';
+  let activeAudioSourceName = localStorage.getItem('teleprompter_audio_device_name') || '';
   let availableAudioDevices = [];
+  let analyserSource = null;
+  let lastLocalLevelTime = 0;
 
   const ENGINE_DESCRIPTIONS = {
     ultrafast: '0.4s interval, tiny.en model (lowest latency, snappiest)',
@@ -687,6 +692,7 @@
           const opt = document.createElement('option');
           opt.value = d.id;
           opt.textContent = d.name;
+          if (d.raw_name) opt.dataset.rawName = d.raw_name;
           if (String(d.id) === String(deviceId)) opt.selected = true;
           optAudioSource.appendChild(opt);
         });
@@ -696,31 +702,58 @@
     if (optAudioSource) {
       optAudioSource.value = activeAudioSource;
     }
+    const matchedDev = availableAudioDevices.find((d) => String(d.id) === String(activeAudioSource));
+    if (matchedDev && (matchedDev.raw_name || matchedDev.name)) {
+      activeAudioSourceName = matchedDev.raw_name || matchedDev.name;
+      localStorage.setItem('teleprompter_audio_device_name', activeAudioSourceName);
+    }
     const isBrowser = activeAudioSource === 'browser';
     if (audioSourceBadge) {
-      audioSourceBadge.textContent = isBrowser ? 'Browser Mic' : 'Hardware Mic';
+      const devName = matchedDev ? (matchedDev.raw_name || matchedDev.name).replace(/\s*\(System Default\)\s*/i, '') : '';
+      audioSourceBadge.textContent = isBrowser ? 'Browser Mic' : (devName || 'Hardware Mic');
       audioSourceBadge.className = 'text-[10px] px-1.5 py-0.5 rounded font-mono border ' +
         (isBrowser ? 'bg-green-950 text-green-300 border-green-700/50' : 'bg-indigo-950 text-indigo-300 border-indigo-700/50');
     }
     if (audioSourceDesc) {
+      const devName = matchedDev ? (matchedDev.raw_name || matchedDev.name).replace(/\s*\(System Default\)\s*/i, '') : 'selected mic';
       audioSourceDesc.textContent = isBrowser
         ? 'Streams directly from your active browser tab mic (matches VU meter).'
-        : 'Backend captures directly from host hardware sound device.';
+        : `Backend captures directly from ${devName} for Whisper. Browser records & monitors ${devName}.`;
+    }
+    if (vuSource) {
+      const devName = matchedDev ? (matchedDev.raw_name || matchedDev.name).replace(/\s*\(System Default\)\s*/i, '') : (isBrowser ? 'Browser' : 'Mic');
+      vuSource.textContent = devName;
     }
   }
 
   if (optAudioSource) {
-    optAudioSource.addEventListener('change', (e) => {
+    optAudioSource.addEventListener('change', async (e) => {
       const devId = e.target.value;
       activeAudioSource = devId;
       localStorage.setItem('teleprompter_audio_device', devId);
+      const matchedDev = availableAudioDevices.find((d) => String(d.id) === String(devId));
+      const targetName = matchedDev ? (matchedDev.raw_name || matchedDev.name) : null;
+      if (targetName) {
+        activeAudioSourceName = targetName;
+        localStorage.setItem('teleprompter_audio_device_name', targetName);
+      }
       updateAudioSourceUI(devId);
       send({ type: 'set_audio_device', device: devId });
+      await switchBrowserAudio(targetName);
       if (devId === 'browser') {
         if (isPrompting) startBrowserAudioStream();
       } else {
         stopBrowserAudioStream();
       }
+    });
+  }
+
+  if (btnRefreshAudioDevices) {
+    btnRefreshAudioDevices.addEventListener('click', async () => {
+      btnRefreshAudioDevices.classList.add('opacity-50');
+      send({ type: 'refresh_audio_devices' });
+      await switchBrowserAudio(activeAudioSourceName);
+      setTimeout(() => btnRefreshAudioDevices.classList.remove('opacity-50'), 400);
     });
   }
 
@@ -1002,18 +1035,41 @@
         }
         if (msg.audio_devices) {
           const savedDev = localStorage.getItem('teleprompter_audio_device');
-          const activeDev = savedDev || msg.active_audio_device || 'browser';
+          const activeDev = savedDev || (msg.browser_audio ? 'browser' : msg.active_audio_device) || 'browser';
           updateAudioSourceUI(activeDev, msg.audio_devices);
+          const matchedDev = (msg.audio_devices || []).find((d) => String(d.id) === String(activeDev));
+          const targetName = matchedDev ? (matchedDev.raw_name || matchedDev.name) : activeAudioSourceName;
+          if (targetName) {
+            activeAudioSourceName = targetName;
+            localStorage.setItem('teleprompter_audio_device_name', targetName);
+            switchBrowserAudio(targetName);
+          }
           if (savedDev && String(savedDev) !== String(msg.active_audio_device)) {
             send({ type: 'set_audio_device', device: savedDev });
           }
         }
-        if (activeAudioSource === 'browser' && isPrompting && audioContext && audioContext.state === 'running') {
-          startBrowserAudioStream();
+        if (activeAudioSource === 'browser' && isPrompting) {
+          if (audioContext && audioContext.state === 'suspended') {
+            audioContext.resume().then(() => startBrowserAudioStream()).catch(() => {});
+          } else {
+            startBrowserAudioStream();
+          }
         }
         break;
       case 'audio_device_changed':
         updateAudioSourceUI(msg.device);
+        const switchedDev = availableAudioDevices.find((d) => String(d.id) === String(msg.device));
+        if (switchedDev) {
+          const tName = switchedDev.raw_name || switchedDev.name;
+          activeAudioSourceName = tName;
+          localStorage.setItem('teleprompter_audio_device_name', tName);
+          switchBrowserAudio(tName);
+        }
+        break;
+      case 'vu':
+        if (Date.now() - lastLocalLevelTime > 150) {
+          renderVuLevel(msg.level);
+        }
         break;
       case 'status':
         onStatus(msg);
@@ -1141,51 +1197,171 @@
   }
 
   // ---- Audio initialization & local VU analyser ----------------------------
-  async function initAudio() {
-    if (audioStream) return;
-    try {
-      audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  let vuLoopStarted = false;
 
-      audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      const source = audioContext.createMediaStreamSource(audioStream);
-      analyser = audioContext.createAnalyser();
-      analyser.fftSize = 256;
-      source.connect(analyser);
+  function renderVuLevel(levelPercent) {
+    if (!vuBar || !vuText) return;
+    vuBar.style.width = levelPercent + '%';
+    vuText.textContent = levelPercent + '%';
 
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    // Visual gain indicator: green (normal), amber (optimal high), red (clipping/peaking)
+    if (levelPercent > 85) {
+      vuBar.className = 'bg-red-500 h-full transition-all duration-75';
+      vuText.className = 'text-[10px] font-mono text-red-400 font-semibold';
+    } else if (levelPercent > 60) {
+      vuBar.className = 'bg-yellow-400 h-full transition-all duration-75';
+      vuText.className = 'text-[10px] font-mono text-yellow-400 font-semibold';
+    } else {
+      vuBar.className = 'bg-green-500 h-full transition-all duration-75';
+      vuText.className = 'text-[10px] font-mono text-gray-400';
+    }
 
-      function processLocalAudio() {
-        if (analyser && isPrompting) {
-          analyser.getByteFrequencyData(dataArray);
-          let sum = 0;
-          for (let i = 2; i < 30; i++) sum += dataArray[i];
-          const average = sum / 28;
-          const levelPercent = Math.min(100, Math.round((average / 128) * 100));
-          vuBar.style.width = levelPercent + '%';
-          vuText.textContent = levelPercent + '%';
-
-          const threshold = parseInt(optSens.value, 10);
-          if (levelPercent > threshold) {
-            if (!vuBar.dataset.speaking) {
-              vuBar.dataset.speaking = '1';
-              setBadge(vadStatus, 'VOICE DETECTED (local)', 'bg-green-950 text-green-400 border-green-500/30');
-            }
-          } else {
-            if (vuBar.dataset.speaking) {
-              delete vuBar.dataset.speaking;
-              if (isPrompting) setBadge(vadStatus, 'HOLDING – SILENCE', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
-            }
-          }
+    const threshold = parseInt(optSens.value, 10);
+    if (levelPercent > threshold) {
+      if (!vuBar.dataset.speaking) {
+        vuBar.dataset.speaking = '1';
+        if (isPrompting) {
+          setBadge(vadStatus, 'VOICE DETECTED', 'bg-green-950 text-green-400 border-green-500/30');
         }
-        requestAnimationFrame(processLocalAudio);
       }
-      processLocalAudio();
-
-      if (browserAudio && audioContext.state === 'running') startBrowserAudioStream();
-    } catch (err) {
-      alert('Microphone access error: ' + err.message);
+    } else {
+      if (vuBar.dataset.speaking) {
+        delete vuBar.dataset.speaking;
+        if (isPrompting) {
+          setBadge(vadStatus, 'HOLDING – SILENCE', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
+        }
+      }
     }
   }
+
+  function startVuLoop() {
+    if (vuLoopStarted) return;
+    vuLoopStarted = true;
+    const dataArray = new Uint8Array(128);
+
+    function processLocalAudio() {
+      if (analyser) {
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 2; i < 30; i++) sum += dataArray[i];
+        const average = sum / 28;
+        // Sensitivity scaling: 96 rather than 128 provides healthy response for studio/dynamic mics
+        const levelPercent = Math.min(100, Math.round((average / 96) * 100));
+        if (levelPercent > 0) {
+          lastLocalLevelTime = Date.now();
+          renderVuLevel(levelPercent);
+        } else if (Date.now() - lastLocalLevelTime > 300) {
+          renderVuLevel(0);
+        }
+      }
+      requestAnimationFrame(processLocalAudio);
+    }
+    processLocalAudio();
+  }
+
+  async function switchBrowserAudio(preferredName) {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+
+      if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioContext.state === 'suspended') {
+        audioContext.resume().catch(() => {});
+      }
+
+      // Enumerate browser audio devices
+      let devices = await navigator.mediaDevices.enumerateDevices();
+      let audioInputs = devices.filter((d) => d.kind === 'audioinput');
+
+      // If devices lack labels (initial permission needed), request quick permission to read labels
+      if (audioInputs.length > 0 && !audioInputs.some((d) => d.label)) {
+        try {
+          const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          tempStream.getTracks().forEach((t) => t.stop());
+          devices = await navigator.mediaDevices.enumerateDevices();
+          audioInputs = devices.filter((d) => d.kind === 'audioinput');
+        } catch (_) {}
+      }
+
+      let matchedDeviceId = null;
+      let matchedLabel = '';
+      if (preferredName && preferredName !== 'browser') {
+        const cleanTarget = preferredName.toLowerCase().replace(/\s*\(system default\)\s*/i, '').trim();
+        const matched = audioInputs.find((d) => {
+          const lbl = (d.label || '').toLowerCase();
+          return lbl && (lbl.includes(cleanTarget) || cleanTarget.includes(lbl));
+        });
+        if (matched) {
+          matchedDeviceId = matched.deviceId;
+          matchedLabel = matched.label;
+        }
+      }
+
+      const isExternal = preferredName && !preferredName.toLowerCase().includes('macbook') && preferredName !== 'browser';
+      const constraints = {
+        audio: matchedDeviceId ? {
+          deviceId: { exact: matchedDeviceId },
+          echoCancellation: !isExternal,
+          noiseSuppression: !isExternal,
+          autoGainControl: !isExternal,
+        } : {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        }
+      };
+
+      if (audioStream) {
+        audioStream.getTracks().forEach((t) => t.stop());
+      }
+
+      audioStream = await navigator.mediaDevices.getUserMedia(constraints);
+      const activeTrack = audioStream.getAudioTracks()[0];
+      const activeLabel = (activeTrack && activeTrack.label) ? activeTrack.label : (matchedLabel || preferredName || 'Microphone');
+
+      if (vuSource) {
+        vuSource.textContent = activeLabel.replace(/\s*\(System Default\)\s*/i, '');
+      }
+
+      if (analyserSource) {
+        try { analyserSource.disconnect(); } catch (_) {}
+      }
+      if (!analyser) {
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+      }
+      analyserSource = audioContext.createMediaStreamSource(audioStream);
+      analyserSource.connect(analyser);
+
+      startVuLoop();
+
+      if (activeAudioSource === 'browser' && isPrompting) {
+        stopBrowserAudioStream();
+        startBrowserAudioStream();
+      }
+    } catch (err) {
+      console.warn('Microphone access / switch warning:', err);
+    }
+  }
+
+  async function initAudio() {
+    if (audioStream && audioStream.active) return;
+    const target = activeAudioSourceName || (activeAudioSource !== 'browser' ? activeAudioSource : null);
+    await switchBrowserAudio(target);
+  }
+
+  // Resume AudioContext and ensure audio init on any initial user interaction
+  const resumeAudioOnGesture = () => {
+    if (!audioStream) {
+      initAudio();
+    } else if (audioContext && audioContext.state === 'suspended') {
+      audioContext.resume().catch(() => {});
+    }
+  };
+  ['click', 'keydown', 'pointerdown', 'touchstart'].forEach((evt) => {
+    window.addEventListener(evt, resumeAudioOnGesture, { passive: true });
+  });
 
   // ---- Camera controls & stream lifecycle -----------------------------------
   async function startCamera() {
@@ -1227,6 +1403,9 @@
     if (captureNode || !audioContext || !audioStream) return;
     if (activeAudioSource !== 'browser') return;
     try {
+      if (audioContext.state === 'suspended') {
+        audioContext.resume().catch((err) => console.warn('AudioContext resume failed:', err));
+      }
       const source = audioContext.createMediaStreamSource(audioStream);
       captureNode = audioContext.createScriptProcessor(4096, 1, 1);
       const silent = audioContext.createGain();
@@ -1252,6 +1431,7 @@
         }
         send({ type: 'audio', data: Array.from(out) });
       };
+      send({ type: 'set_audio_device', device: 'browser' });
     } catch (err) {
       console.error('Error initializing browser audio stream:', err);
     }
@@ -1825,7 +2005,7 @@
 
   // ---- Start / Rehearse / Stop -----------------------------------------------
   if (btnRehearse) {
-    btnRehearse.addEventListener('click', () => {
+    btnRehearse.addEventListener('click', async () => {
       if (isPrompting) return;
       if (!transcriptInput.value.trim()) return;
 
@@ -1838,16 +2018,25 @@
       if (optRecordMode) optRecordMode.disabled = true;
       if (optRecordFormat) optRecordFormat.disabled = true;
 
-      if (audioContext && audioContext.state === 'suspended') audioContext.resume();
+      if (!audioStream || !audioStream.active || !audioStream.getAudioTracks().some((t) => t.readyState === 'live')) {
+        await initAudio();
+      }
+      if (audioContext && audioContext.state === 'suspended') {
+        try {
+          await audioContext.resume();
+        } catch (err) {
+          console.warn('AudioContext resume error:', err);
+        }
+      }
 
-      if (activeAudioSource === 'browser' && audioContext && audioContext.state === 'running') {
+      if (activeAudioSource === 'browser') {
         startBrowserAudioStream();
       }
 
       mediaRecorder = null;
       recIndicator.classList.add('hidden');
 
-      send({ type: 'start', words: allWords.map((w) => w.original), rehearsal: true, wpm: 140 });
+      send({ type: 'start', words: allWords.map((w) => w.original), rehearsal: true, wpm: 140, audio_device: activeAudioSource });
 
       updateStopButtonText();
       btnStart.classList.add('hidden');
@@ -1860,7 +2049,7 @@
     });
   }
 
-  btnStart.addEventListener('click', () => {
+  btnStart.addEventListener('click', async () => {
     if (isPrompting) return;
     if (!transcriptInput.value.trim()) return;
 
@@ -1874,14 +2063,26 @@
     if (optRecordMode) optRecordMode.disabled = true;
     if (optRecordFormat) optRecordFormat.disabled = true;
 
-    if (audioContext && audioContext.state === 'suspended') audioContext.resume();
+    if (!audioStream || !audioStream.active || !audioStream.getAudioTracks().some((t) => t.readyState === 'live')) {
+      await initAudio();
+    }
+    if (audioContext && audioContext.state === 'suspended') {
+      try {
+        await audioContext.resume();
+      } catch (err) {
+        console.warn('AudioContext resume error:', err);
+      }
+    }
 
-    if (activeAudioSource === 'browser' && audioContext && audioContext.state === 'running') {
+    if (activeAudioSource === 'browser') {
       startBrowserAudioStream();
     }
 
     if (activeRecordMode !== 'off') {
       try {
+        if (!audioStream || !audioStream.getAudioTracks().some((t) => t.readyState === 'live')) {
+          await switchBrowserAudio(activeAudioSourceName);
+        }
         const tracksToRecord = [];
         if (activeRecordMode === 'video' && videoStream) {
           tracksToRecord.push(...videoStream.getVideoTracks().filter((t) => t.readyState === 'live'));
@@ -1918,7 +2119,7 @@
       recIndicator.classList.add('hidden');
     }
 
-    send({ type: 'start', words: allWords.map((w) => w.original), wpm: 140 });
+    send({ type: 'start', words: allWords.map((w) => w.original), wpm: 140, audio_device: activeAudioSource });
 
     updateStopButtonText();
     btnStart.classList.add('hidden');

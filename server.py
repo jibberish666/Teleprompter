@@ -12,7 +12,6 @@ import json
 import os
 import socket
 
-import sounddevice as sd
 from websockets.asyncio.server import serve
 from websockets.datastructures import Headers
 from websockets.http11 import Response
@@ -63,9 +62,12 @@ def load_persisted_config():
         return {}
 
 
-def save_persisted_config(port):
+def save_persisted_config(port=None, mic=None):
     cfg = load_persisted_config()
-    cfg["port"] = port
+    if port is not None:
+        cfg["port"] = port
+    if mic is not None:
+        cfg["mic"] = mic
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8") as fh:
             json.dump(cfg, fh, indent=2)
@@ -97,7 +99,7 @@ def build_parser():
         default=env("TELEPROMPTER_COMPUTE_TYPE", DEFAULTS["compute_type"]),
     )
     parser.add_argument("--device", default=env("TELEPROMPTER_DEVICE", "cpu"))
-    parser.add_argument("--mic", default=env("TELEPROMPTER_MIC", DEFAULTS["mic"]))
+    parser.add_argument("--mic", default=env("TELEPROMPTER_MIC", cfg.get("mic", DEFAULTS["mic"])))
     parser.add_argument("--tick", type=float, default=None)
     parser.add_argument("--window", type=float, default=None)
     parser.add_argument("--align-window", type=int, default=DEFAULTS["align_window"])
@@ -111,35 +113,7 @@ def build_parser():
     return parser
 
 
-def resolve_mic(name):
-    if not name:
-        return None
-    try:
-        return int(name)
-    except (TypeError, ValueError):
-        pass
-    target = str(name)
-    for idx, dev in enumerate(sd.query_devices()):
-        if dev["max_input_channels"] > 0 and target.lower() in dev["name"].lower():
-            return idx
-    return target
 
-
-def get_audio_devices():
-    devices = [
-        {"id": "browser", "name": "Browser Microphone (Live WebRTC · Recommended)"}
-    ]
-    try:
-        dev_list = sd.query_devices()
-        default_in = sd.default.device[0] if sd.default.device else -1
-        for idx, dev in enumerate(dev_list):
-            if dev.get("max_input_channels", 0) > 0:
-                is_def = (idx == default_in)
-                label = dev["name"] + (" (System Default)" if is_def else "")
-                devices.append({"id": str(idx), "name": label, "is_default": is_def})
-    except Exception as e:
-        print(f"Error querying audio devices: {e}", flush=True)
-    return devices
 
 
 class SyncHub:
@@ -219,8 +193,14 @@ async def main(args):
     loop = asyncio.get_running_loop()
     hub = SyncHub(loop)
 
-    mic = resolve_mic(args.mic)
-    capture = audio_capture.AudioCapture(mic=mic, browser_audio=args.browser_audio)
+    def _on_level(level, device):
+        hub.schedule({"type": "vu", "level": level, "device": device})
+
+    audio_source = audio_capture.AudioSource(
+        device=args.mic,
+        browser_audio=args.browser_audio,
+        on_level=_on_level,
+    )
 
     def _on_sync(idx):
         hub.schedule({"type": "sync", "word_index": idx, "state": "speaking"})
@@ -228,7 +208,7 @@ async def main(args):
     def _on_status(payload):
         if payload.get("ready") in (True, False):
             # One-time readiness broadcast also carries source config.
-            payload = {**payload, "browser_audio": args.browser_audio,
+            payload = {**payload, "browser_audio": audio_source.is_browser,
                        "host": args.host, "port": args.port}
         hub.schedule({"type": "status", **payload})
 
@@ -247,7 +227,7 @@ async def main(args):
     beam_size = prof.get("beam_size", 1)
 
     trans = transcriber.Transcriber(
-        audio=capture,
+        audio=audio_source,
         model_name=model_name,
         device=args.device,
         compute_type=args.compute_type,
@@ -270,11 +250,11 @@ async def main(args):
         try:
             await out.put(json.dumps({
                 "type": "config",
-                "browser_audio": capture.browser_audio,
+                "browser_audio": audio_source.is_browser,
                 "profile": trans.profile,
                 "profiles": transcriber.ENGINE_PROFILES,
-                "audio_devices": get_audio_devices(),
-                "active_audio_device": capture.active_device_id,
+                "audio_devices": audio_source.get_devices(),
+                "active_audio_device": audio_source.active_device_id,
             }))
             await out.put(json.dumps({
                 "type": "status",
@@ -282,7 +262,7 @@ async def main(args):
                 "ready": trans.is_ready,
                 "profile": trans.profile,
                 "tick": trans.tick,
-                "active_audio_device": capture.active_device_id,
+                "active_audio_device": audio_source.active_device_id,
             }))
             async for raw in ws:
                 await handle_message(raw)
@@ -299,6 +279,10 @@ async def main(args):
             return
         mtype = msg.get("type")
         if mtype == "start":
+            device = msg.get("audio_device")
+            if device is not None:
+                audio_source.set_device(device)
+                save_persisted_config(mic=str(device))
             words = msg.get("words") or []
             is_rehearsal = bool(msg.get("rehearsal"))
             if not trans.is_ready:
@@ -340,20 +324,27 @@ async def main(args):
         elif mtype == "set_audio_device":
             device = msg.get("device")
             if device is not None:
-                capture.set_device(device)
+                audio_source.set_device(device)
+                save_persisted_config(mic=str(device))
                 hub.schedule({
                     "type": "audio_device_changed",
-                    "device": capture.active_device_id,
-                    "is_browser": capture.browser_audio,
+                    "device": audio_source.active_device_id,
+                    "is_browser": audio_source.is_browser,
                 })
+        elif mtype == "refresh_audio_devices":
+            devs = audio_source.get_devices()
+            hub.schedule({
+                "type": "config",
+                "browser_audio": audio_source.is_browser,
+                "profile": trans.profile,
+                "profiles": transcriber.ENGINE_PROFILES,
+                "audio_devices": devs,
+                "active_audio_device": audio_source.active_device_id,
+            })
         elif mtype == "audio":
-            if capture.browser_audio:
-                data = msg.get("data")
-                if isinstance(data, list) and data:
-                    import numpy as np
-                    capture.write_frames(np.asarray(data, dtype=np.float32))
-                elif msg.get("b64"):
-                    pass
+            data = msg.get("data")
+            if data:
+                audio_source.ingest_frames(data)
 
     # Bind first: if port is in use or bind fails, background threads won't be orphaned.
     async with serve(
@@ -364,8 +355,8 @@ async def main(args):
         max_size=2 * 1024 * 1024,
         compression=None,
     ) as server:
-        save_persisted_config(args.port)
-        capture.start()
+        save_persisted_config(port=args.port)
+        audio_source.start()
         trans.start_loading_async()
         trans.start_loop()
 
@@ -373,23 +364,14 @@ async def main(args):
             if server.sockets else f"{args.host}:{args.port}"
         print(f"Local AI Teleprompter listening on {shown}", flush=True)
         print(f"  Open http://{args.host}:{args.port} in your browser", flush=True)
-        print(f"  Mic backend: {'browser-audio (WS)' if args.browser_audio else 'sounddevice'}", flush=True)
+        print(f"  Mic backend: {'browser-audio (WS)' if audio_source.is_browser else 'sounddevice'}", flush=True)
         print(f"  Profile: {trans.profile} (model={trans.model_name}, tick={trans.tick}s, compute_type={args.compute_type})", flush=True)
         print("  First run downloads the model if needed. Press Ctrl+C to stop.", flush=True)
         try:
             await asyncio.Future()
         finally:
             trans.shutdown()
-            capture.stop()
-
-
-def _report_device():
-    print("Input devices:")
-    for idx, dev in enumerate(sd.query_devices()):
-        if dev["max_input_channels"] > 0:
-            name = dev["name"]
-            mark = " <-- default" if idx == sd.default.device[0] else ""
-            print(f"  [{idx}] {name}{mark}")
+            audio_source.stop()
 
 
 if __name__ == "__main__":
@@ -398,7 +380,7 @@ if __name__ == "__main__":
     if args.browser_audio:
         print("Browser-audio mode: microphone will be owned by the browser.", flush=True)
     else:
-        _report_device()
+        audio_capture.AudioSource.report_devices()
     try:
         asyncio.run(main(args))
     except KeyboardInterrupt:

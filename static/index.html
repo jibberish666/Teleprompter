@@ -76,13 +76,21 @@
 
       <div class="bg-gray-950/80 p-3 rounded border border-gray-800 space-y-2">
         <div class="flex justify-between items-center text-xs">
-          <span class="text-gray-400 font-medium">Local Vocal Energy</span>
-          <span id="vu-text" class="text-[10px] font-mono text-gray-500">0%</span>
+          <span class="text-gray-400 font-medium">Microphone Level <span class="text-[10px] text-gray-500 font-normal">(Live Monitor)</span></span>
+          <div class="flex items-center gap-2">
+            <span id="vu-source" class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-gray-900 border border-gray-800 text-gray-400">M4</span>
+            <span id="vu-text" class="text-[10px] font-mono text-gray-400">0%</span>
+          </div>
         </div>
-        <div class="w-full bg-gray-800 h-2.5 rounded overflow-hidden">
+        <div class="w-full bg-gray-800 h-2.5 rounded overflow-hidden relative">
           <div id="vu-bar" class="bg-green-500 h-full w-0 transition-all duration-75"></div>
         </div>
-        <div class="text-[10px] text-gray-500 italic">Visual cue only. Scrolling is driven by local Whisper word sync.</div>
+        <div class="flex justify-between text-[9px] text-gray-500 font-mono">
+          <span>0%</span>
+          <span>50%</span>
+          <span class="text-red-400/80">85% (Peak)</span>
+        </div>
+        <div class="text-[10px] text-gray-500 italic">Active live monitor: speak to test and adjust your microphone gain prior to recording.</div>
       </div>
 
       <div class="bg-gray-950/60 p-3 rounded border border-gray-800 space-y-3 text-xs">
@@ -125,7 +133,12 @@
           </div>
 
           <div>
-            <label class="block text-gray-400 mb-1">Microphone Input</label>
+            <div class="flex justify-between items-center mb-1">
+              <label class="block text-gray-400">Microphone Input</label>
+              <button id="btn-refresh-audio-devices" type="button" class="text-[10px] text-indigo-400 hover:text-indigo-300 transition cursor-pointer flex items-center gap-1" title="Scan for audio devices">
+                <span>↻ Scan Devices</span>
+              </button>
+            </div>
             <select id="opt-audio-source" class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-indigo-500 cursor-pointer">
               <option value="browser">Browser Microphone (WebRTC · Recommended)</option>
             </select>
