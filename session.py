@@ -4,11 +4,13 @@ Encapsulates speech alignment orchestration, audio ingestion, model lifecycle,
 session state transitions (idle, running, rehearsal, stopped), and client
 event dispatching behind a clean, testable interface.
 """
+import copy
 import json
+import os
+import base64
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Union
 
-import copy
 import aligner
 import audio_capture
 import config
@@ -249,7 +251,7 @@ class PrompterSession:
         audio_device: Optional[Union[int, str]] = None,
     ) -> bool:
         """Start or restart a teleprompter tracking session."""
-        if audio_device is not None:
+        if audio_device is not None and str(audio_device) != str(self.audio_source.active_device_id):
             self.set_audio_device(audio_device)
 
         if not self.transcriber.is_ready:
@@ -403,6 +405,41 @@ class PrompterSession:
         if data:
             self.audio_source.ingest_frames(data)
 
+    def save_take(self, filename: str, data_b64: str) -> Dict[str, Any]:
+        """Save a base64-encoded take or archive directly into the recordings/ folder on disk."""
+        import base64
+
+        clean_name = os.path.basename(filename.strip().replace("\\", "/")) if filename else "recording.webm"
+        if not clean_name:
+            clean_name = "recording.webm"
+
+        recordings_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
+        os.makedirs(recordings_dir, exist_ok=True)
+        target_path = os.path.join(recordings_dir, clean_name)
+
+        try:
+            raw_bytes = base64.b64decode(data_b64)
+            with open(target_path, "wb") as f:
+                f.write(raw_bytes)
+            payload = {
+                "type": "take_saved",
+                "filename": clean_name,
+                "path": target_path,
+                "bytes": len(raw_bytes),
+                "success": True,
+            }
+            self.emit(payload)
+            return payload
+        except Exception as e:
+            payload = {
+                "type": "take_saved",
+                "filename": clean_name,
+                "error": str(e),
+                "success": False,
+            }
+            self.emit(payload)
+            return payload
+
     # -- Message Dispatcher ---------------------------------------------------
 
     def dispatch(self, raw_or_msg: Union[str, Dict[str, Any]]) -> None:
@@ -442,6 +479,8 @@ class PrompterSession:
             self.refresh_audio_devices()
         elif mtype == "audio":
             self.ingest_audio_frames(msg.get("data"))
+        elif mtype == "save_take":
+            self.save_take(msg.get("filename", ""), msg.get("data", ""))
 
 
 # Convenient alias

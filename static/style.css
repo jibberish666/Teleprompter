@@ -368,3 +368,68 @@
 .prompter-word-rehearsal-repeated {
   text-decoration-color: rgba(168, 85, 247, 0.85);
 }
+
+/* ==========================================================================
+   Section Markers & Prompter Dividers
+   ========================================================================== */
+
+.prompter-line-section {
+  min-height: var(--prompter-line-height, 45px);
+  height: var(--prompter-line-height, 45px);
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-start !important;
+  padding: 0 20px !important;
+  user-select: none;
+}
+
+.prompter-section-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.25), rgba(99, 102, 241, 0.15));
+  border: 1px solid rgba(129, 140, 248, 0.4);
+  color: #c7d2fe;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.prompter-section-pill::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background-color: #818cf8;
+  box-shadow: 0 0 6px #818cf8;
+}
+
+/* ==========================================================================
+   Export Modal Takes List
+   ========================================================================== */
+
+.export-take-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(17, 24, 39, 0.7);
+  border: 1px solid rgba(55, 65, 81, 0.7);
+  transition: all 0.15s ease;
+}
+
+.export-take-row:hover {
+  background: rgba(31, 41, 55, 0.85);
+  border-color: rgba(99, 102, 241, 0.4);
+}
+
+.export-take-master {
+  background: rgba(49, 46, 129, 0.2);
+  border-color: rgba(99, 102, 241, 0.4);
+}

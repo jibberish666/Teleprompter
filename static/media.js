@@ -282,6 +282,348 @@
   }
 
   /**
+   * Slices a continuous AudioBuffer between startSeconds and endSeconds with zero generational loss.
+   *
+   * @param {AudioBuffer|object} audioBuffer - Source Web Audio buffer
+   * @param {number} startSeconds - Cut start in seconds
+   * @param {number} endSeconds - Cut end in seconds
+   * @returns {AudioBuffer|object} Sliced buffer
+   */
+  function sliceAudioBuffer(audioBuffer, startSeconds, endSeconds) {
+    if (!audioBuffer || audioBuffer.length === 0) return null;
+    const sampleRate = audioBuffer.sampleRate;
+    const numChannels = audioBuffer.numberOfChannels;
+    const totalDuration = audioBuffer.length / sampleRate;
+
+    const clampedStart = Math.max(0, Math.min(totalDuration, startSeconds || 0));
+    const clampedEnd = Math.max(clampedStart, Math.min(totalDuration, endSeconds !== undefined ? endSeconds : totalDuration));
+
+    const startSample = Math.max(0, Math.floor(clampedStart * sampleRate));
+    const endSample = Math.min(audioBuffer.length, Math.ceil(clampedEnd * sampleRate));
+    const sliceLength = Math.max(0, endSample - startSample);
+
+    let sliced;
+    if (typeof AudioBuffer !== 'undefined') {
+      try {
+        sliced = new AudioBuffer({
+          length: Math.max(1, sliceLength),
+          numberOfChannels: numChannels,
+          sampleRate: sampleRate
+        });
+      } catch (_) {
+        // Fallback for older Web Audio implementations
+      }
+    }
+
+    if (!sliced) {
+      // Mock / fallback AudioBuffer for Node test environment and older browsers
+      const channels = [];
+      for (let ch = 0; ch < numChannels; ch++) {
+        channels.push(new Float32Array(sliceLength));
+      }
+      sliced = {
+        numberOfChannels: numChannels,
+        sampleRate: sampleRate,
+        length: sliceLength,
+        duration: sliceLength / sampleRate,
+        getChannelData: (ch) => channels[ch]
+      };
+    }
+
+    for (let ch = 0; ch < numChannels; ch++) {
+      const srcData = audioBuffer.getChannelData(ch);
+      const dstData = sliced.getChannelData(ch);
+      if (sliceLength > 0) {
+        dstData.set(srcData.subarray(startSample, endSample));
+      }
+    }
+
+    return sliced;
+  }
+
+  /**
+   * Concatenates multiple AudioBuffers into a single unified continuous AudioBuffer.
+   *
+   * @param {Array<AudioBuffer|object>} buffers - Array of Web Audio buffers
+   * @returns {AudioBuffer|object} Concatenated buffer
+   */
+  function concatAudioBuffers(buffers) {
+    if (!buffers || buffers.length === 0) return null;
+    const validBuffers = buffers.filter((b) => b && b.length > 0);
+    if (validBuffers.length === 0) return null;
+    if (validBuffers.length === 1) return validBuffers[0];
+
+    const sampleRate = validBuffers[0].sampleRate;
+    const numChannels = validBuffers[0].numberOfChannels;
+    const totalLength = validBuffers.reduce((acc, b) => acc + b.length, 0);
+
+    let concatenated;
+    if (typeof AudioBuffer !== 'undefined') {
+      try {
+        concatenated = new AudioBuffer({
+          length: totalLength,
+          numberOfChannels: numChannels,
+          sampleRate: sampleRate
+        });
+      } catch (_) {}
+    }
+
+    if (!concatenated) {
+      const channels = [];
+      for (let ch = 0; ch < numChannels; ch++) {
+        channels.push(new Float32Array(totalLength));
+      }
+      concatenated = {
+        numberOfChannels: numChannels,
+        sampleRate: sampleRate,
+        length: totalLength,
+        duration: totalLength / sampleRate,
+        getChannelData: (ch) => channels[ch]
+      };
+    }
+
+    for (let ch = 0; ch < numChannels; ch++) {
+      const dstData = concatenated.getChannelData(ch);
+      let offset = 0;
+      for (const buf of validBuffers) {
+        const srcData = buf.getChannelData(ch);
+        dstData.set(srcData, offset);
+        offset += buf.length;
+      }
+    }
+
+    return concatenated;
+  }
+
+  /**
+   * Slices an AudioBuffer into discrete section takes and a stitched master take.
+   *
+   * @param {AudioBuffer|object} audioBuffer - Decoded audio buffer
+   * @param {Array<{id: string, title: string, startSec: number|null, endSec: number|null}>} [sections] - Section markers
+   * @param {'wav'|'mp3'} [format='wav'] - Target audio encoding format
+   * @param {number} [pad=0.25] - Silence padding in seconds around section bounds
+   * @returns {{ takes: Array<{ filename: string, title: string, duration: number, blob: Blob|ArrayBuffer, isMaster: boolean }> }}
+   */
+  function processAudioTakes(audioBuffer, sections = [], format = 'wav', pad = 0.25) {
+    if (!audioBuffer || !Array.isArray(sections) || sections.length === 0) {
+      return { takes: [] };
+    }
+
+    const cleanSectionBuffers = [];
+    const takes = [];
+    const totalDuration = audioBuffer.duration || (audioBuffer.length / audioBuffer.sampleRate) || 0;
+
+    for (const sec of sections) {
+      const sStart = Math.max(0, (sec.startSec !== null && sec.startSec !== undefined ? sec.startSec : 0) - pad);
+      const sEnd = Math.min(totalDuration, (sec.endSec !== null && sec.endSec !== undefined ? sec.endSec : totalDuration) + pad);
+
+      if (sEnd > sStart) {
+        const sliceBuf = sliceAudioBuffer(audioBuffer, sStart, sEnd);
+        if (sliceBuf) {
+          cleanSectionBuffers.push(sliceBuf);
+          let secBlob;
+          if (format === 'mp3') {
+            secBlob = audioBufferToMp3(sliceBuf, 192);
+          } else {
+            secBlob = audioBufferToWav(sliceBuf);
+          }
+          takes.push({
+            filename: `${sec.id}.${format}`,
+            title: `Section [${sec.title}]`,
+            duration: sEnd - sStart,
+            blob: secBlob,
+            isMaster: false
+          });
+        }
+      }
+    }
+
+    // Concatenate clean section buffers into everything.[format]
+    if (cleanSectionBuffers.length > 0) {
+      const stitchedBuf = concatAudioBuffers(cleanSectionBuffers);
+      let stitchedBlob;
+      if (format === 'mp3') {
+        stitchedBlob = audioBufferToMp3(stitchedBuf, 192);
+      } else {
+        stitchedBlob = audioBufferToWav(stitchedBuf);
+      }
+      takes.push({
+        filename: `everything.${format}`,
+        title: 'Spliced Master Take',
+        duration: stitchedBuf.duration || (stitchedBuf.length / stitchedBuf.sampleRate),
+        blob: stitchedBlob,
+        isMaster: true
+      });
+    }
+
+    return { takes };
+  }
+
+  // =========================================================================
+  // Zero-Dependency In-Browser PKZIP Archive Builder
+  // =========================================================================
+
+  // Precomputed CRC-32 lookup table (polynomial 0xEDB88320)
+  const CRC32_TABLE = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) {
+      c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    CRC32_TABLE[i] = c >>> 0;
+  }
+
+  function computeCrc32(uint8Array) {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < uint8Array.length; i++) {
+      crc = CRC32_TABLE[(crc ^ uint8Array[i]) & 0xFF] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  /**
+   * Encodes a list of files into a standard, cross-platform PKZIP archive Blob.
+   * Uses compression method 0 (Store), which is instantaneous, zero-CPU overhead,
+   * and universally supported by macOS Archive Utility, Windows Explorer, and unzip.
+   *
+   * @param {Array<{name: string, data: Blob|ArrayBuffer|Uint8Array|string}>} files
+   * @returns {Promise<Blob|Uint8Array>} ZIP Blob in browser or Uint8Array in Node.js
+   */
+  async function createZipBlob(files) {
+    if (!files || !files.length) {
+      if (typeof Blob !== 'undefined') return new Blob([], { type: 'application/zip' });
+      return new Uint8Array(0);
+    }
+
+    const encoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : {
+      encode: (str) => {
+        const buf = new Uint8Array(str.length);
+        for (let i = 0; i < str.length; i++) buf[i] = str.charCodeAt(i) & 0xff;
+        return buf;
+      }
+    };
+
+    const entries = [];
+    for (const f of files) {
+      let rawBytes;
+      if (typeof Blob !== 'undefined' && f.data instanceof Blob) {
+        rawBytes = new Uint8Array(await f.data.arrayBuffer());
+      } else if (f.data instanceof ArrayBuffer) {
+        rawBytes = new Uint8Array(f.data);
+      } else if (ArrayBuffer.isView(f.data)) {
+        rawBytes = new Uint8Array(f.data.buffer, f.data.byteOffset, f.data.byteLength);
+      } else if (typeof f.data === 'string') {
+        rawBytes = encoder.encode(f.data);
+      } else {
+        rawBytes = new Uint8Array(0);
+      }
+
+      const nameBytes = encoder.encode(f.name || 'file.bin');
+      const crc = computeCrc32(rawBytes);
+
+      entries.push({
+        name: f.name || 'file.bin',
+        nameBytes: nameBytes,
+        dataBytes: rawBytes,
+        crc: crc,
+        size: rawBytes.byteLength
+      });
+    }
+
+    // Calculate total buffer size
+    let localHeadersSize = 0;
+    let centralDirSize = 0;
+    for (const e of entries) {
+      localHeadersSize += 30 + e.nameBytes.length + e.size;
+      centralDirSize += 46 + e.nameBytes.length;
+    }
+    const totalSize = localHeadersSize + centralDirSize + 22; // 22 for EOCD
+
+    const zipBuffer = new ArrayBuffer(totalSize);
+    const view = new DataView(zipBuffer);
+    const byteView = new Uint8Array(zipBuffer);
+
+    // Current date/time in MS-DOS format
+    const now = new Date();
+    const dosTime = ((now.getHours() & 0x1f) << 11) | ((now.getMinutes() & 0x3f) << 5) | ((now.getSeconds() >> 1) & 0x1f);
+    const dosDate = (((now.getFullYear() - 1980) & 0x7f) << 9) | (((now.getMonth() + 1) & 0x0f) << 5) | (now.getDate() & 0x1f);
+
+    let offset = 0;
+    const localHeaderOffsets = [];
+
+    // Write Local File Headers + File Data
+    for (const e of entries) {
+      localHeaderOffsets.push(offset);
+
+      // Signature 0x04034b50
+      view.setUint32(offset, 0x04034b50, true);
+      view.setUint16(offset + 4, 20, true); // Version needed: 2.0
+      view.setUint16(offset + 6, 0x0800, true); // Flags: UTF-8 filename
+      view.setUint16(offset + 8, 0, true); // Compression: Store (0)
+      view.setUint16(offset + 10, dosTime, true);
+      view.setUint16(offset + 12, dosDate, true);
+      view.setUint32(offset + 14, e.crc, true);
+      view.setUint32(offset + 18, e.size, true); // Compressed size
+      view.setUint32(offset + 22, e.size, true); // Uncompressed size
+      view.setUint16(offset + 26, e.nameBytes.length, true);
+      view.setUint16(offset + 28, 0, true); // Extra field length
+
+      offset += 30;
+      byteView.set(e.nameBytes, offset);
+      offset += e.nameBytes.length;
+
+      byteView.set(e.dataBytes, offset);
+      offset += e.size;
+    }
+
+    // Write Central Directory Headers
+    const centralDirStartOffset = offset;
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      const localOffset = localHeaderOffsets[i];
+
+      // Signature 0x02014b50
+      view.setUint32(offset, 0x02014b50, true);
+      view.setUint16(offset + 4, 20, true); // Version made by: 2.0
+      view.setUint16(offset + 6, 20, true); // Version needed: 2.0
+      view.setUint16(offset + 8, 0x0800, true); // Flags: UTF-8 filename
+      view.setUint16(offset + 10, 0, true); // Compression: Store (0)
+      view.setUint16(offset + 12, dosTime, true);
+      view.setUint16(offset + 14, dosDate, true);
+      view.setUint32(offset + 16, e.crc, true);
+      view.setUint32(offset + 20, e.size, true);
+      view.setUint32(offset + 24, e.size, true);
+      view.setUint16(offset + 28, e.nameBytes.length, true);
+      view.setUint16(offset + 30, 0, true); // Extra field len
+      view.setUint16(offset + 32, 0, true); // Comment len
+      view.setUint16(offset + 34, 0, true); // Disk start
+      view.setUint16(offset + 36, 0, true); // Internal attributes
+      view.setUint32(offset + 38, 0, true); // External attributes
+      view.setUint32(offset + 42, localOffset, true); // Relative offset of local header
+
+      offset += 46;
+      byteView.set(e.nameBytes, offset);
+      offset += e.nameBytes.length;
+    }
+
+    // Write End of Central Directory Record (EOCD)
+    // Signature 0x06054b50
+    view.setUint32(offset, 0x06054b50, true);
+    view.setUint16(offset + 4, 0, true); // Disk number
+    view.setUint16(offset + 6, 0, true); // Disk where central directory starts
+    view.setUint16(offset + 8, entries.length, true); // Entries on this disk
+    view.setUint16(offset + 10, entries.length, true); // Total entries
+    view.setUint32(offset + 12, centralDirSize, true); // Size of central directory
+    view.setUint32(offset + 16, centralDirStartOffset, true); // Offset of central directory
+    view.setUint16(offset + 20, 0, true); // Comment length
+
+    if (typeof Blob !== 'undefined') {
+      return new Blob([zipBuffer], { type: 'application/zip' });
+    }
+    return byteView;
+  }
+
+  /**
    * Generates timestamped recording filenames matching standard session convention.
    */
   function getRecordingFilename(mode, extension, now = new Date()) {
@@ -293,10 +635,123 @@
 
 
   // =========================================================================
+  // RecordingFinalizer (C2) — finalizeRecording(chunks, opts) → TakeSet
+  // =========================================================================
+  //
+  // Pure async function: no closure over MediaRecorder, no browser event binding.
+  // Testable in Node with a fake AudioBuffer.
+  //
+  // opts: { mimeType, extension, isAudioOnly, audioFormat, audioContext,
+  //         sections[], sessionDurationSec, onProgress }
+  // returns: { blob, extension, filename, takes[] }
+  async function finalizeRecording(chunks, opts = {}) {
+    const {
+      mimeType = 'audio/webm',
+      extension: rawExt = 'webm',
+      isAudioOnly = true,
+      audioFormat = 'webm',
+      audioContext = null,
+      sections = [],
+      sessionDurationSec = 0,
+      onProgress = null,
+    } = opts;
+
+    const recordedBlob = new Blob(chunks, { type: mimeType });
+    let finalBlob = recordedBlob;
+    let finalExtension = rawExt;
+
+    // ---- Audio encode / decode path (WAV or MP3) ----------------------------
+    if (isAudioOnly && (audioFormat === 'wav' || audioFormat === 'mp3')) {
+      if (typeof onProgress === 'function') {
+        onProgress(`Processing ${audioFormat.toUpperCase()} audio…`);
+      }
+
+      const arrayBuffer = await recordedBlob.arrayBuffer();
+      const decodeCtx = audioContext ||
+        (typeof window !== 'undefined' && new (window.AudioContext || window.webkitAudioContext)());
+
+      if (decodeCtx && decodeCtx.state === 'suspended') {
+        try { await decodeCtx.resume(); } catch (_) {}
+      }
+
+      let audioBuffer = null;
+      if (decodeCtx) {
+        try {
+          // Safeguard against Chromium decodeAudioData hanging on short WebM blobs
+          const decodePromise = decodeCtx.decodeAudioData(arrayBuffer.slice(0));
+          const timeoutPromise = new Promise((_, rej) =>
+            setTimeout(() => rej(new Error('Audio decoding timed out')), 2000)
+          );
+          audioBuffer = await Promise.race([decodePromise, timeoutPromise]);
+        } catch (decErr) {
+          console.warn('decodeAudioData encountered error or timeout, retaining raw audio:', decErr);
+        }
+      }
+
+      if (audioBuffer) {
+        if (audioFormat === 'wav') {
+          finalBlob = audioBufferToWav(audioBuffer);
+          finalExtension = 'wav';
+        } else if (audioFormat === 'mp3') {
+          finalBlob = audioBufferToMp3(audioBuffer, 192);
+          finalExtension = 'mp3';
+        }
+
+        const effectiveMode = isAudioOnly ? 'audio' : 'video';
+        const filename = getRecordingFilename(effectiveMode, finalExtension);
+
+        let takes;
+        if (sections.length > 0) {
+          if (typeof onProgress === 'function') {
+            onProgress('Extracting clean section takes…');
+          }
+          const result = processAudioTakes(audioBuffer, sections, audioFormat);
+          takes = result.takes;
+        } else {
+          takes = [{
+            filename,
+            title: 'Master Session Audio',
+            duration: audioBuffer.duration || (audioBuffer.length / audioBuffer.sampleRate),
+            blob: finalBlob,
+            isMaster: true,
+          }];
+        }
+
+        return { blob: finalBlob, extension: finalExtension, filename, takes };
+      }
+    }
+
+    // ---- Fallback: video, failed decode, or raw format ----------------------
+    // For video mode, surface sectionMarkers as metadata (C6 preparation).
+    const effectiveMode = isAudioOnly ? 'audio' : 'video';
+    const filename = getRecordingFilename(effectiveMode, finalExtension);
+    const sectionMarkers = sections.length > 0
+      ? sections.map((s) => ({ id: s.id, title: s.title, startSec: s.startSec, endSec: s.endSec }))
+      : [];
+
+    return {
+      blob: finalBlob,
+      extension: finalExtension,
+      filename,
+      sectionMarkers,
+      takes: [{
+        filename,
+        title: effectiveMode === 'video' ? 'Master Session Video' : 'Master Session Audio',
+        duration: sessionDurationSec,
+        blob: finalBlob,
+        isMaster: true,
+        sectionMarkers,
+      }],
+    };
+  }
+
+
+  // =========================================================================
   // MediaSession Coordinator Class
   // =========================================================================
 
   class MediaSession {
+
     constructor(options = {}) {
       this.options = Object.assign({
         fftSize: 256,
@@ -339,6 +794,9 @@
         }
       }
       if (this.audioContext && this.audioContext.state === 'suspended') {
+        if (typeof navigator !== 'undefined' && navigator.userActivation && !navigator.userActivation.hasBeenActive) {
+          return this.audioContext;
+        }
         try {
           await this.audioContext.resume();
         } catch (_) {}
@@ -373,6 +831,19 @@
       const { deviceId, label } = matchDevice(preferredName, audioInputs);
       const isExternal = preferredName && !preferredName.toLowerCase().includes('macbook') && preferredName !== 'browser';
       const constraints = buildAudioConstraints(deviceId, isExternal);
+
+      // Guard: do not tear down live tracks if already active and matching, or if actively recording
+      if (this.audioStream && this.audioStream.active &&
+          this.audioStream.getAudioTracks().some((t) => t.readyState === 'live') &&
+          this.activeAudioSourceName && preferredName &&
+          (this.activeAudioSourceName === label || this.activeAudioSourceName.toLowerCase().includes(preferredName.toLowerCase()))) {
+        return this.activeAudioSourceName;
+      }
+
+      if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+        console.warn('Ignoring audio device switch while recording is active');
+        return this.activeAudioSourceName;
+      }
 
       if (this.audioStream) {
         this.audioStream.getTracks().forEach((t) => t.stop());
@@ -508,6 +979,7 @@
       }
 
       const hasVideoTrack = tracksToRecord.some((t) => t.kind === 'video');
+      this.hasRecordedVideoTrack = hasVideoTrack;
       if (mode === 'audio' || !hasVideoTrack) {
         this.activeRecordingOptions = getAudioRecorderOptions(audioFormat);
       } else {
@@ -522,62 +994,89 @@
           this.recordedChunks.push(e.data);
         }
       };
+      this.mediaRecorder.onerror = (e) => {
+        console.error('MediaRecorder error:', e);
+        if (typeof this.onError === 'function') this.onError(e.error || e);
+      };
       this.mediaRecorder.start(1000);
       return this.mediaRecorder;
     }
 
     /**
-     * Stops recording and resolves with the final encoded Blob and filename.
+     * Stops recording and resolves with the final encoded Blob, filename, and section takes.
+     *
+     * @param {object|Function} [optionsOrCb] - Configuration options or legacy progress callback
+     * @param {Array<{id: string, title: string, startSec: number|null, endSec: number|null}>} [optionsOrCb.sections] - Script section markers for take slicing
+     * @param {number} [optionsOrCb.sessionDurationSec] - Total session duration in seconds
+     * @param {Function} [optionsOrCb.onProgress] - Callback for encoding/slicing status updates
+     * @returns {Promise<{blob: Blob, extension: string, filename: string, takes: Array<object>}|null>}
      */
-    stopRecording(onProgressCallback) {
+    stopRecording(optionsOrCb) {
+      let sections = [];
+      let sessionDurationSec = 0;
+      let onProgress = null;
+
+      if (typeof optionsOrCb === 'function') {
+        onProgress = optionsOrCb;
+      } else if (optionsOrCb && typeof optionsOrCb === 'object') {
+        sections = Array.isArray(optionsOrCb.sections) ? optionsOrCb.sections : [];
+        sessionDurationSec = Number(optionsOrCb.sessionDurationSec) || 0;
+        onProgress = optionsOrCb.onProgress || optionsOrCb.onProgressCallback || null;
+      }
+
       return new Promise((resolve, reject) => {
         if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') {
           return resolve(null);
         }
 
+        // onstop is now a thin adapter — all encode/slice logic lives in finalizeRecording() (C2)
         this.mediaRecorder.onstop = async () => {
           try {
-            const recordedBlob = new Blob(this.recordedChunks, {
-              type: (this.activeRecordingOptions && this.activeRecordingOptions.mimeType) || 'audio/webm'
+            const result = await finalizeRecording(this.recordedChunks, {
+              mimeType: (this.activeRecordingOptions && this.activeRecordingOptions.mimeType) || 'audio/webm',
+              extension: (this.activeRecordingOptions && this.activeRecordingOptions.extension) || 'webm',
+              isAudioOnly: this.activeRecordMode === 'audio' || !this.hasRecordedVideoTrack,
+              audioFormat: this.activeAudioFormat,
+              audioContext: this.audioContext,
+              sections,
+              sessionDurationSec,
+              onProgress,
             });
-
-            let finalBlob = recordedBlob;
-            let finalExtension = (this.activeRecordingOptions && this.activeRecordingOptions.extension) || 'webm';
-
-            // Convert to WAV or MP3 for audio if selected
-            if (this.activeRecordMode === 'audio' && (this.activeAudioFormat === 'wav' || this.activeAudioFormat === 'mp3')) {
-              if (typeof onProgressCallback === 'function') {
-                onProgressCallback(`Processing ${this.activeAudioFormat.toUpperCase()} audio…`);
-              }
-
-              const arrayBuffer = await recordedBlob.arrayBuffer();
-              const decodeContext = new (window.AudioContext || window.webkitAudioContext)();
-              const audioBuffer = await decodeContext.decodeAudioData(arrayBuffer);
-
-              if (this.activeAudioFormat === 'wav') {
-                finalBlob = audioBufferToWav(audioBuffer);
-                finalExtension = 'wav';
-              } else if (this.activeAudioFormat === 'mp3') {
-                finalBlob = audioBufferToMp3(audioBuffer, 192);
-                finalExtension = 'mp3';
-              }
-              try { decodeContext.close(); } catch (_) {}
-            }
-
-            const filename = getRecordingFilename(this.activeRecordMode, finalExtension);
-            resolve({ blob: finalBlob, extension: finalExtension, filename: filename });
+            resolve(result);
           } catch (err) {
-            // Fallback: resolve with raw recorded chunks
-            const fallbackExt = (this.activeRecordingOptions && this.activeRecordingOptions.extension) || 'webm';
-            const fallbackBlob = new Blob(this.recordedChunks, {
-              type: (this.activeRecordingOptions && this.activeRecordingOptions.mimeType) || 'audio/webm'
-            });
-            const filename = getRecordingFilename(this.activeRecordMode, fallbackExt);
-            resolve({ blob: fallbackBlob, extension: fallbackExt, filename: filename, error: err });
+            console.warn('finalizeRecording threw, resolving null:', err);
+            resolve(null);
           }
         };
 
-        this.mediaRecorder.stop();
+        const safetyTimer = setTimeout(() => {
+          if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+            try { this.mediaRecorder.stop(); } catch (_) {}
+          }
+          const isAudioOnly = this.activeRecordMode === 'audio' || !this.hasRecordedVideoTrack;
+          const rawMime = (this.activeRecordingOptions && this.activeRecordingOptions.mimeType) || 'audio/webm';
+          const fallbackExt = rawMime.includes('mp4') ? 'mp4' : (rawMime.includes('ogg') ? 'ogg' : 'webm');
+          const fallbackBlob = new Blob(this.recordedChunks, { type: rawMime });
+          const effectiveMode = isAudioOnly ? 'audio' : 'video';
+          const filename = getRecordingFilename(effectiveMode, fallbackExt);
+          resolve({
+            blob: fallbackBlob,
+            extension: fallbackExt,
+            filename: filename,
+            takes: [{ filename, title: effectiveMode === 'video' ? 'Master Session Video' : 'Master Session Audio', duration: sessionDurationSec, blob: fallbackBlob, isMaster: true }]
+          });
+        }, 2500);
+
+        try {
+          if (this.mediaRecorder.state === 'recording' && typeof this.mediaRecorder.requestData === 'function') {
+            this.mediaRecorder.requestData();
+          }
+          this.mediaRecorder.stop();
+        } catch (stopErr) {
+          clearTimeout(safetyTimer);
+          console.warn('Error calling mediaRecorder.stop():', stopErr);
+          resolve(null);
+        }
       });
     }
 
@@ -621,11 +1120,18 @@
     floatToInt16,
     audioBufferToWav,
     audioBufferToMp3,
+    sliceAudioBuffer,
+    concatAudioBuffers,
+    processAudioTakes,
+    computeCrc32,
+    createZipBlob,
     getAudioRecorderOptions,
     getVideoRecorderOptions,
     matchDevice,
     buildAudioConstraints,
     getRecordingFilename,
+    // RecordingFinalizer (C2)
+    finalizeRecording,
     // Coordinator
     MediaSession
   };

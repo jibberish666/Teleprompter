@@ -46,6 +46,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "difficult_color": "#f59e0b",
         "difficult_style": "pill",
         "difficult_words": [],
+        "retake_hotkey": "r",
     },
     "script": {
         "saved_transcript": "",
@@ -166,6 +167,9 @@ def validate_and_sanitize(raw: Any) -> Dict[str, Any]:
         dw = ui.get("difficult_words")
         if isinstance(dw, list):
             result["ui"]["difficult_words"] = [str(w).strip().lower() for w in dw if str(w).strip()]
+        hk = ui.get("retake_hotkey")
+        if isinstance(hk, str) and hk.strip():
+            result["ui"]["retake_hotkey"] = hk.strip().lower()[:10]
 
     # -- Script domain --
     scr = raw.get("script")

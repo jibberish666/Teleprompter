@@ -145,9 +145,88 @@ describe('TeleprompterFormatter - Token Parsing for Presentation Layer', () => {
     const emptyResult = Formatter.parseTokens('');
     assert.deepEqual(emptyResult.lines, []);
     assert.deepEqual(emptyResult.allWords, []);
+    assert.deepEqual(emptyResult.sections, []);
 
     const whitespaceResult = Formatter.parseTokens('   \n\n  ');
     assert.deepEqual(whitespaceResult.lines, []);
     assert.deepEqual(whitespaceResult.allWords, []);
+    assert.deepEqual(whitespaceResult.sections, []);
   });
 });
+
+describe('TeleprompterFormatter - Section Parsing & Tagging', () => {
+  test('preserves standalone bracketed section lines while stripping inline cues', () => {
+    const script = `[1]\nWelcome to the presentation [PAUSE] today.\n[2]\nBy balancing the core assembly (smiling) we achieve peak performance.`;
+    const cleaned = Formatter.cleanCues(script);
+
+    assert.match(cleaned, /\[1\]/);
+    assert.match(cleaned, /\[2\]/);
+    assert.doesNotMatch(cleaned, /\[PAUSE\]/);
+    assert.doesNotMatch(cleaned, /\(smiling\)/);
+  });
+
+  test('sanitizes bracketed section names into filesystem-safe identifiers', () => {
+    assert.equal(Formatter.sanitizeSectionFilename('1'), '1');
+    assert.equal(Formatter.sanitizeSectionFilename('Take 2: Intro'), 'Take_2_Intro');
+    assert.equal(Formatter.sanitizeSectionFilename('Section / Part #3!'), 'Section_Part_3');
+    assert.equal(Formatter.sanitizeSectionFilename(''), 'section');
+  });
+
+  test('parses sections, tags words, and creates non-spoken header line objects', () => {
+    const script = `[1]\nFirst sentence here.\n\n[2]\nSecond sentence follows.`;
+    const { lines, allWords, sections } = Formatter.parseTokens(script);
+
+    assert.equal(sections.length, 2);
+    assert.equal(sections[0].id, '1');
+    assert.equal(sections[0].title, '1');
+    assert.equal(sections[1].id, '2');
+    assert.equal(sections[1].title, '2');
+
+    // Section header lines in linesData must not have speech words
+    const headerLines = lines.filter((l) => l.isSectionHeader);
+    assert.equal(headerLines.length, 2);
+    assert.equal(headerLines[0].words.length, 0, 'Section header line must have no speech words');
+    assert.equal(headerLines[0].sectionId, '1');
+    assert.equal(headerLines[1].sectionId, '2');
+
+    // Speech words must not contain the section header titles
+    assert.equal(allWords.some((w) => w.original === '[1]' || w.original === '[2]'), false);
+
+    // Words must be mapped to their parent sections
+    assert.equal(allWords[0].sectionId, '1');
+    assert.equal(allWords[0].sectionTitle, '1');
+    assert.equal(allWords[allWords.length - 1].sectionId, '2');
+    assert.equal(allWords[allWords.length - 1].sectionTitle, '2');
+  });
+
+  test('defaults leading text before first section header to section "intro"', () => {
+    const script = `Opening greeting before any tag.\n\n[Main Body]\nHere is the detailed content.`;
+    const { lines, allWords, sections } = Formatter.parseTokens(script);
+
+    assert.equal(sections.length, 2);
+    assert.equal(sections[0].id, 'intro');
+    assert.equal(sections[0].title, 'intro');
+    assert.equal(sections[1].id, 'Main_Body');
+    assert.equal(sections[1].title, 'Main Body');
+
+    const firstWord = allWords[0];
+    assert.equal(firstWord.original, 'Opening');
+    assert.equal(firstWord.sectionId, 'intro');
+
+    const lastWord = allWords[allWords.length - 1];
+    assert.equal(lastWord.original, 'content.');
+    assert.equal(lastWord.sectionId, 'Main_Body');
+  });
+
+  test('maintains backward compatibility when script has no bracketed sections', () => {
+    const script = `Just a standard single take script.\nNo section markers anywhere.`;
+    const { lines, allWords, sections } = Formatter.parseTokens(script);
+
+    assert.equal(sections.length, 0, 'Expected empty sections array when no section tags exist');
+    assert.equal(lines.some((l) => l.isSectionHeader), false);
+    for (const w of allWords) {
+      assert.equal(w.sectionId, null);
+    }
+  });
+});
+

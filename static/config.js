@@ -52,11 +52,13 @@
       sync_fumble_filter: false,
       difficult_color: '#f59e0b',
       difficult_style: 'pill',
-      difficult_words: []
+      difficult_words: [],
+      retake_hotkey: 'r'
     },
     script: {
       saved_transcript: '',
-      rehearsal_words: []
+      rehearsal_words: [],
+      protected_terms: []   // Per-production protected noun phrases; overrides formatter defaults when non-empty
     }
   };
 
@@ -165,6 +167,9 @@
           .map(w => String(w).trim().toLowerCase())
           .filter(Boolean);
       }
+      if (typeof raw.ui.retake_hotkey === 'string' && raw.ui.retake_hotkey.trim()) {
+        result.ui.retake_hotkey = raw.ui.retake_hotkey.trim().toLowerCase().slice(0, 10);
+      }
     }
 
     // -- Script --
@@ -175,6 +180,11 @@
       if (Array.isArray(raw.script.rehearsal_words)) {
         result.script.rehearsal_words = raw.script.rehearsal_words
           .map(w => String(w).trim().toLowerCase())
+          .filter(Boolean);
+      }
+      if (Array.isArray(raw.script.protected_terms)) {
+        result.script.protected_terms = raw.script.protected_terms
+          .map(t => String(t).trim())
           .filter(Boolean);
       }
     }

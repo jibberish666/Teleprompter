@@ -156,11 +156,12 @@ async def static_handler(_connection, request):
     """Serve static files for plain HTTP GETs; let WebSocket upgrades through."""
     if (request.headers.get("Upgrade") or "").lower() == "websocket":
         return None
+
     if request.method != "GET":
         body = b"Method Not Allowed"
         return Response(405, "Method Not Allowed", Headers({"Content-Type": "text/plain", "Content-Length": str(len(body))}), body)
 
-    path = request.path
+    path = request.path.split("?", 1)[0].split("#", 1)[0]
     if path in ("/", "/index.html"):
         rel = "index.html"
     elif path.startswith("/static/"):
@@ -184,7 +185,18 @@ async def static_handler(_connection, request):
         return Response(404, "Not Found", Headers({"Content-Type": "text/plain", "Content-Length": str(len(body))}), body)
 
     ct = MIME.get(os.path.splitext(full)[1].lower(), "application/octet-stream")
-    return Response(200, "OK", Headers({"Content-Type": ct, "Content-Length": str(len(body))}), body)
+    return Response(
+        200,
+        "OK",
+        Headers({
+            "Content-Type": ct,
+            "Content-Length": str(len(body)),
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }),
+        body,
+    )
 
 
 async def main(args):

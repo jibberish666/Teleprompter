@@ -73,13 +73,34 @@
   ];
 
   /**
+   * Sanitizes a bracketed section name into a clean, filesystem-safe filename identifier.
+   */
+  function sanitizeSectionFilename(name) {
+    if (!name || typeof name !== 'string') return 'section';
+    const clean = name.trim().replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
+    return clean || 'section';
+  }
+
+  /**
    * 1. Strips non-spoken script cues, stage directions, and parentheticals.
+   * Standalone bracketed lines (e.g., [1], [Introduction]) are preserved as structural section markers.
    */
   function cleanCues(text) {
     if (!text || typeof text !== 'string') return '';
-    return text
-      // Bracketed cues: [CAMERA 1], [PAUSE], [SLIDE 2], etc.
-      .replace(/\[[^\]]*\]/g, ' ')
+
+    const lines = text.split(/\r?\n/);
+    const cleanedLines = lines.map((line) => {
+      const trimmed = line.trim();
+      // Standalone section line like [1], [Introduction], [Take 2: Intro]
+      const sectionMatch = trimmed.match(/^\[([^[\]]+)\]$/);
+      if (sectionMatch) {
+        return `[${sectionMatch[1].trim()}]`;
+      }
+      // Inline bracketed cues on regular text lines are stripped
+      return line.replace(/\[[^\]]*\]/g, ' ');
+    });
+
+    return cleanedLines.join('\n')
       // Common stage direction parentheticals: (pause), (smiling), (laughs), etc.
       .replace(/\((?:pause|smiling|smilingly|laughs?|laughter|sighs?|giggles?|clears throat|beat|applause|music|whispers?|fade in|fade out|cut to)[^)]*\)/gi, ' ')
       // Speaker tags at start of lines: "HOST:", "SPEAKER 1:", etc.
@@ -238,73 +259,116 @@
   }
 
   /**
-   * 3. Complete pipeline: cleans cues, splits sentences, chunks cadence, and formats script.
+   * Formats a single text paragraph into rhythmic lines and breath pauses.
+   */
+  function formatParagraph(para, options = {}) {
+    const trimmedPara = para.replace(/\s+/g, ' ').trim();
+    if (!trimmedPara) return [];
+
+    const sentenceRegex = /([.!?]+)(?:\s+|$)/g;
+    const sentences = [];
+    let lastIndex = 0;
+    let match;
+
+    while ((match = sentenceRegex.exec(trimmedPara)) !== null) {
+      const sentenceText = trimmedPara.slice(lastIndex, match.index + match[1].length).trim();
+      if (sentenceText) sentences.push(sentenceText);
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < trimmedPara.length) {
+      const rem = trimmedPara.slice(lastIndex).trim();
+      if (rem) sentences.push(rem);
+    }
+
+    const paraOutputLines = [];
+    for (let sIdx = 0; sIdx < sentences.length; sIdx++) {
+      const sentence = sentences[sIdx];
+      const sentenceLines = chunkSentence(sentence, options);
+
+      if (paraOutputLines.length > 0 && sentenceLines.length > 0) {
+        paraOutputLines.push('');
+      }
+
+      paraOutputLines.push(...sentenceLines);
+    }
+    return paraOutputLines;
+  }
+
+  /**
+   * 3. Complete pipeline: cleans cues, preserves sections, chunks cadence, and formats script.
    */
   function formatScript(text, options = {}) {
     if (!text || typeof text !== 'string' || !text.trim()) return '';
 
     const cleaned = cleanCues(text);
-    const rawParagraphs = cleaned.split(/\r?\n\s*\r?\n/);
-    const formattedSections = [];
+    const rawLines = cleaned.split(/\r?\n/);
+    const blocks = [];
+    let currentParagraphLines = [];
 
-    for (const para of rawParagraphs) {
-      const trimmedPara = para.replace(/\s+/g, ' ').trim();
-      if (!trimmedPara) continue;
-
-      // Split on full sentence boundaries (. ! ? ;)
-      const sentenceRegex = /([.!?]+)(?:\s+|$)/g;
-      const sentences = [];
-      let lastIndex = 0;
-      let match;
-
-      while ((match = sentenceRegex.exec(trimmedPara)) !== null) {
-        const sentenceText = trimmedPara.slice(lastIndex, match.index + match[1].length).trim();
-        if (sentenceText) sentences.push(sentenceText);
-        lastIndex = match.index + match[0].length;
-      }
-      if (lastIndex < trimmedPara.length) {
-        const rem = trimmedPara.slice(lastIndex).trim();
-        if (rem) sentences.push(rem);
-      }
-
-      const paraOutputLines = [];
-
-      for (let sIdx = 0; sIdx < sentences.length; sIdx++) {
-        const sentence = sentences[sIdx];
-        const sentenceLines = chunkSentence(sentence, options);
-
-        if (paraOutputLines.length > 0 && sentenceLines.length > 0) {
-          // Visual breath pause line between distinct sentences
-          paraOutputLines.push('');
+    function flushCurrentParagraph() {
+      if (currentParagraphLines.length > 0) {
+        const paraText = currentParagraphLines.join(' ').trim();
+        if (paraText) {
+          const lines = formatParagraph(paraText, options);
+          if (lines.length > 0) {
+            blocks.push(lines.join('\n'));
+          }
         }
-
-        paraOutputLines.push(...sentenceLines);
+        currentParagraphLines = [];
       }
-
-      formattedSections.push(paraOutputLines.join('\n'));
     }
 
-    return formattedSections.join('\n\n');
+    for (const line of rawLines) {
+      const trimmed = line.trim();
+      const isSectionHeader = /^\[([^[\]]+)\]$/.test(trimmed);
+
+      if (isSectionHeader) {
+        flushCurrentParagraph();
+        blocks.push(trimmed);
+      } else if (!trimmed) {
+        flushCurrentParagraph();
+      } else {
+        currentParagraphLines.push(trimmed);
+      }
+    }
+    flushCurrentParagraph();
+
+    return blocks.join('\n\n');
   }
 
   /**
    * 4. Tokenizes script into structured line & word models for prompter rendering.
+   * Maps words to their parent section and creates non-spoken section divider lines.
    */
   function parseTokens(rawText, options = {}) {
     if (!rawText || typeof rawText !== 'string' || !rawText.trim()) {
-      return { lines: [], allWords: [] };
+      return { lines: [], allWords: [], sections: [] };
     }
 
-    // Auto-format if unbroken long paragraphs exist
     const inputLines = rawText.split(/\r\n|\r|\n/).map((s) => s.trim()).filter(Boolean);
-    const hasUnbrokenLongLines = inputLines.some((l) => l.split(/\s+/).length > 8);
+    const hasUnbrokenLongLines = inputLines.some((l) => !/^\[([^[\]]+)\]$/.test(l) && l.split(/\s+/).length > 8);
     const effectiveText = (inputLines.length <= 3 && hasUnbrokenLongLines)
       ? formatScript(rawText, options)
       : rawText;
 
     const rawLines = effectiveText.split(/\r\n|\r|\n/);
+    const hasSectionTags = rawLines.some((l) => /^\[([^[\]]+)\]$/.test(l.trim()));
+
     const linesData = [];
     const allWords = [];
+    const sectionsMap = new Map();
+    const sectionsList = [];
+
+    // If script contains section tags, words before the first tag default to section 'intro'
+    let currentSection = hasSectionTags
+      ? { id: 'intro', title: 'intro', startIndex: null, endIndex: null }
+      : null;
+
+    if (currentSection) {
+      sectionsMap.set(currentSection.id, currentSection);
+      sectionsList.push(currentSection);
+    }
+
     let globalWordIdx = 0;
     let prevWasBlank = false;
 
@@ -312,11 +376,35 @@
       const trimmedLine = rawLines[l].trim();
 
       if (!trimmedLine) {
-        // Blank line: breath pause or paragraph break
         if (!prevWasBlank && linesData.length > 0) {
-          linesData.push({ lineIdx: linesData.length, words: [], isBlank: true });
+          linesData.push({ lineIdx: linesData.length, words: [], isBlank: true, isSectionHeader: false });
           prevWasBlank = true;
         }
+        continue;
+      }
+
+      // Check for standalone section header tag [Name]
+      const sectionMatch = trimmedLine.match(/^\[([^[\]]+)\]$/);
+      if (sectionMatch) {
+        const rawTitle = sectionMatch[1].trim();
+        const secId = sanitizeSectionFilename(rawTitle);
+
+        currentSection = sectionsMap.get(secId);
+        if (!currentSection) {
+          currentSection = { id: secId, title: rawTitle, startIndex: null, endIndex: null };
+          sectionsMap.set(secId, currentSection);
+          sectionsList.push(currentSection);
+        }
+
+        prevWasBlank = false;
+        linesData.push({
+          lineIdx: linesData.length,
+          words: [],
+          isBlank: false,
+          isSectionHeader: true,
+          sectionId: currentSection.id,
+          sectionTitle: currentSection.title
+        });
         continue;
       }
 
@@ -324,7 +412,6 @@
       const lineWords = trimmedLine.split(/\s+/).filter(Boolean);
       if (lineWords.length === 0) continue;
 
-      // If a line is still over 8 words, format it with rhythmic phrasing
       const lineChunks = lineWords.length > 8
         ? formatScript(trimmedLine, options).split(/\r\n|\r|\n/).map((s) => s.trim())
         : [trimmedLine];
@@ -332,21 +419,69 @@
       for (const chunk of lineChunks) {
         if (!chunk) {
           if (!prevWasBlank && linesData.length > 0) {
-            linesData.push({ lineIdx: linesData.length, words: [], isBlank: true });
+            linesData.push({ lineIdx: linesData.length, words: [], isBlank: true, isSectionHeader: false });
             prevWasBlank = true;
           }
           continue;
         }
+
+        // Catch any nested section marker from formatScript
+        const chunkSecMatch = chunk.match(/^\[([^[\]]+)\]$/);
+        if (chunkSecMatch) {
+          const rawTitle = chunkSecMatch[1].trim();
+          const secId = sanitizeSectionFilename(rawTitle);
+          currentSection = sectionsMap.get(secId);
+          if (!currentSection) {
+            currentSection = { id: secId, title: rawTitle, startIndex: null, endIndex: null };
+            sectionsMap.set(secId, currentSection);
+            sectionsList.push(currentSection);
+          }
+          prevWasBlank = false;
+          linesData.push({
+            lineIdx: linesData.length,
+            words: [],
+            isBlank: false,
+            isSectionHeader: true,
+            sectionId: currentSection.id,
+            sectionTitle: currentSection.title
+          });
+          continue;
+        }
+
         prevWasBlank = false;
         const chunkWords = chunk.split(/\s+/).filter(Boolean);
         if (chunkWords.length === 0) continue;
-        const lineObj = { lineIdx: linesData.length, words: [], isBlank: false };
+
+        const lineObj = {
+          lineIdx: linesData.length,
+          words: [],
+          isBlank: false,
+          isSectionHeader: false,
+          sectionId: currentSection ? currentSection.id : null,
+          sectionTitle: currentSection ? currentSection.title : null
+        };
+
         chunkWords.forEach((wordStr) => {
-          const wObj = { globalIdx: globalWordIdx, lineIdx: lineObj.lineIdx, original: wordStr };
+          const wObj = {
+            globalIdx: globalWordIdx,
+            lineIdx: lineObj.lineIdx,
+            original: wordStr,
+            sectionId: currentSection ? currentSection.id : null,
+            sectionTitle: currentSection ? currentSection.title : null
+          };
+
+          if (currentSection) {
+            if (currentSection.startIndex === null) {
+              currentSection.startIndex = globalWordIdx;
+            }
+            currentSection.endIndex = globalWordIdx;
+          }
+
           lineObj.words.push(wObj);
           allWords.push(wObj);
           globalWordIdx++;
         });
+
         linesData.push(lineObj);
       }
     }
@@ -356,7 +491,14 @@
       linesData.pop();
     }
 
-    return { lines: linesData, allWords: allWords };
+    // Filter out empty sections (such as an unused leading 'intro' if script started with [1])
+    const activeSections = sectionsList.filter((s) => s.startIndex !== null);
+
+    return {
+      lines: linesData,
+      allWords: allWords,
+      sections: activeSections
+    };
   }
 
   return {
@@ -365,6 +507,7 @@
     ARTICLES_AND_DETERMINERS,
     DANGLING_WORDS,
     DEFAULT_PROTECTED_TERMS,
+    sanitizeSectionFilename,
     cleanCues,
     findProtectedRanges,
     chunkSentence,

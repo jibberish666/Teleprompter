@@ -331,6 +331,33 @@ class TestPrompterSession(unittest.TestCase):
         self.assertEqual(self.session.cfg["recording"]["mode"], "audio")
         self.assertEqual(self.session.cfg["recording"]["audio_format"], "wav")
 
+    def test_dispatch_save_take(self):
+        import base64
+        import os
+        import shutil
+
+        dummy_content = b"TELEPROMPTER_TEST_TAKE_DATA"
+        dummy_b64 = base64.b64encode(dummy_content).decode("ascii")
+        self.session.dispatch(json.dumps({
+            "type": "save_take",
+            "filename": "unit_test_take.webm",
+            "data": dummy_b64
+        }))
+
+        saved_events = [e for e in self.events if e.get("type") == "take_saved"]
+        self.assertEqual(len(saved_events), 1)
+        self.assertTrue(saved_events[0]["success"])
+        self.assertEqual(saved_events[0]["filename"], "unit_test_take.webm")
+        saved_path = saved_events[0]["path"]
+        self.assertTrue(os.path.isfile(saved_path))
+        with open(saved_path, "rb") as f:
+            self.assertEqual(f.read(), dummy_content)
+        # Clean up unit test artifact
+        try:
+            os.remove(saved_path)
+        except OSError:
+            pass
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Architecture Review — Teleprompter Media Capture & Export</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose" });
+    </script>
+    <style>
+      body { font-family: 'Georgia', 'Times New Roman', serif; }
+      .mono { font-family: 'Menlo', 'Monaco', 'Courier New', monospace; }
+      .deep-bg { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); }
+      .module-box {
+        border: 1.5px solid #475569;
+        border-radius: 6px;
+        padding: 8px 14px;
+        background: #1e293b;
+        color: #e2e8f0;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-family: 'Menlo','Monaco','Courier New',monospace;
+        text-align: center;
+      }
+      .module-box.shallow { border-color: #dc2626; background: #1c0a0a; }
+      .module-box.deep-module { border: 2.5px solid #6366f1; background: #0f0f2d; }
+      .module-box.note-box { border-color: #d97706; background: #1c1305; color: #fcd34d; font-size: 9px; text-transform: none; letter-spacing: 0; }
+      .cross-band { border-left: 4px solid; padding: 6px 12px; margin-bottom: 4px; font-size: 11px; font-family: 'Menlo','Monaco',monospace; }
+      .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 10px; font-weight: 700; letter-spacing: .05em; }
+      .badge-strong { background: #064e3b; color: #34d399; border: 1px solid #065f46; }
+      .badge-explore { background: #451a03; color: #fbbf24; border: 1px solid #78350f; }
+      .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 9px; background: #334155; color: #94a3b8; margin-left: 4px; font-family: monospace; }
+      .adr-warn { background: #451a03; border-left: 3px solid #d97706; padding: 6px 12px; border-radius: 4px; color: #fcd34d; font-size: 11px; }
+      article { scroll-margin-top: 80px; }
+      .win-bullet { font-size: 11px; color: #94a3b8; margin: 2px 0; }
+      .win-bullet span { color: #e2e8f0; }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900">
+    <main class="max-w-5xl mx-auto px-6 py-12 space-y-12">
+
+      <header class="border-b border-slate-200 pb-6">
+        <div class="flex items-start justify-between">
+          <div>
+            <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Architecture Review</h1>
+            <p class="text-slate-500 text-sm mt-1">Teleprompter &middot; Media Capture &amp; Export Subsystem &middot; 30 Sep 2026</p>
+          </div>
+          <div class="text-right text-xs text-slate-400 mono space-y-1 pt-1">
+            <div>static/media.js &middot; static/app.js &middot; static/formatter.js</div>
+            <div>server.py &middot; session.py</div>
+          </div>
+        </div>
+        <div class="mt-5 flex flex-wrap gap-5 text-xs text-slate-500">
+          <div class="flex items-center gap-2"><div class="w-5 h-4 border border-slate-400 rounded-sm bg-white"></div><span>module</span></div>
+          <div class="flex items-center gap-2"><svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4"/></svg><span>seam</span></div>
+          <div class="flex items-center gap-2"><svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" stroke="#dc2626" stroke-width="2"/></svg><span>leakage</span></div>
+          <div class="flex items-center gap-2"><div class="w-5 h-4 border-2 border-indigo-500 rounded-sm bg-slate-900"></div><span>deep module</span></div>
+        </div>
+      </header>
+
+      <section id="candidates" class="space-y-14">
+
+        <!-- C1 -->
+        <article id="c1">
+          <div class="flex flex-wrap items-center gap-3 mb-4">
+            <h2 class="text-lg font-bold text-slate-800">1. Deepen the Section Timestamp Tracker</h2>
+            <span class="badge badge-strong">Strong</span>
+            <span class="tag">local-substitutable</span>
+          </div>
+          <div class="mono text-xs text-slate-500 mb-4 space-y-0.5">
+            <div>static/app.js &mdash; handleSectionWordProgress() &middot; triggerSectionRetake() &middot; btnStop handler</div>
+            <div>static/app.js &mdash; parsedSections[] (module-level, mutable plain objects)</div>
+          </div>
+          <div class="grid grid-cols-2 gap-4 mb-6">
+            <div>
+              <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Before</p>
+              <div class="rounded-lg border border-slate-200 bg-white p-4" style="min-height:280px;">
+                <p class="text-xs text-slate-400 italic mb-3">Cross-section: one word arrives &rarr; 6 call sites mutate parsedSections[]</p>
+                <div class="cross-band border-red-400 text-red-600 text-xs">updateHighlighting(wordIndex)</div>
+                <div class="cross-band border-orange-400 text-orange-600 text-xs">handleSectionWordProgress(word) &mdash; find(), mutate .startSec</div>
+                <div class="cross-band border-yellow-500 text-yellow-700 text-xs">triggerSectionRetake() &mdash; nulls .startSec, .endSec</div>
+                <div class="cross-band border-slate-300 text-slate-500 text-xs">btnStop &mdash; closes last section, calls stopRecording(sections)</div>
+                <div class="cross-band border-slate-300 text-slate-500 text-xs">media.js stopRecording &mdash; reads .startSec / .endSec</div>
+                <div class="cross-band border-slate-300 text-slate-500 text-xs">processAudioTakes() &mdash; slices by sec timestamps</div>
+                <div class="mt-3 p-2 rounded bg-red-50 border border-red-200 text-xs text-red-600">6 call sites. No interface. Any one can corrupt the slice coordinates passed to processAudioTakes.</div>
+              </div>
+            </div>
+            <div>
+              <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">After</p>
+              <div class="deep-bg rounded-lg border-2 border-indigo-500 p-4" style="min-height:280px;">
+                <p class="text-xs text-indigo-400 italic mb-3">Deep module: SectionTimeline &mdash; one interface, all mutation inside</p>
+                <div class="module-box deep-module mb-3">SectionTimeline</div>
+                <div class="text-xs text-indigo-300 mono space-y-1 mb-4 pl-2">
+                  <div>.wordSeen(word, nowSec) &rarr; void</div>
+                  <div>.retake(sectionId)      &rarr; seekIndex</div>
+                  <div>.close(nowSec)          &rarr; void</div>
+                  <div>.getSectionMarkers()    &rarr; Section[]</div>
+                </div>
+                <div class="grid grid-cols-3 gap-1 mb-2">
+                  <div class="module-box text-xs">highlight</div>
+                  <div class="module-box text-xs">btnStop</div>
+                  <div class="module-box text-xs">stopRecord</div>
+                </div>
+                <p class="text-xs text-indigo-300 text-center">all read via .getSectionMarkers()</p>
+                <div class="mt-3 p-2 rounded bg-indigo-950 border border-indigo-700 text-xs text-indigo-200">One module owns startSec/endSec. 4 methods. Edge cases (re-take reset, partial section) handled internally.</div>
+              </div>
+            </div>
+          </div>
+          <div class="grid grid-cols-3 gap-6">
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Problem</p><p class="text-slate-600 text-sm">Section timestamp state scattered across six call sites in app.js; any site can corrupt the slice coordinates passed to processAudioTakes.</p></div>
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Solution</p><p class="text-slate-600 text-sm">Extract <strong>SectionTimeline</strong> owning all mutation of startSec/endSec behind a 4-method interface.</p></div>
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Wins</p>
+              <ul class="space-y-1">
+                <li class="win-bullet">&bull; <span>locality</span>: timestamp bugs concentrate in one module</li>
+                <li class="win-bullet">&bull; <span>interface shrinks</span>: 4 methods vs 6 mutation sites</li>
+                <li class="win-bullet">&bull; <span>leverage</span>: retake logic tested once, not per-caller</li>
+                <li class="win-bullet">&bull; <span>deletion test passes</span>: removing it concentrates complexity</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <hr class="border-slate-200"/>
+
+        <!-- C2 -->
+        <article id="c2">
+          <div class="flex flex-wrap items-center gap-3 mb-4">
+            <h2 class="text-lg font-bold text-slate-800">2. Collapse the stopRecording Encoding Pipeline</h2>
+            <span class="badge badge-strong">Strong</span>
+            <span class="tag">local-substitutable</span>
+          </div>
+          <div class="mono text-xs text-slate-500 mb-4 space-y-0.5">
+            <div>static/media.js &mdash; MediaSession.stopRecording() &middot; onstop handler (lines 903&ndash;1007 &mdash; 104 lines)</div>
+          </div>
+          <div class="grid grid-cols-2 gap-4 mb-6">
+            <div>
+              <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Before &mdash; interface nearly as tall as implementation</p>
+              <div class="rounded-lg border border-slate-200 bg-white p-4 flex gap-4 items-start" style="min-height:260px;">
+                <div class="shrink-0" style="width:70px;">
+                  <p class="text-xs uppercase text-slate-400 mb-1">interface</p>
+                  <div class="bg-red-100 border border-red-300 rounded" style="height:65px;"></div>
+                  <p class="text-xs text-slate-400 mt-1 leading-tight">stopRecording(opts)</p>
+                </div>
+                <div class="shrink-0" style="width:70px;">
+                  <p class="text-xs uppercase text-slate-400 mb-1">impl</p>
+                  <div class="bg-slate-200 border border-slate-300 rounded" style="height:210px;"></div>
+                  <p class="text-xs text-slate-400 mt-1">onstop handler</p>
+                </div>
+                <div class="flex-1 text-xs text-slate-500 space-y-1 pt-1">
+                  <p class="font-semibold text-red-600">onstop does everything:</p>
+                  <p>&bull; format detection</p>
+                  <p>&bull; decodeAudioData + 2s timeout race</p>
+                  <p>&bull; WAV/MP3 encode branch</p>
+                  <p>&bull; processAudioTakes()</p>
+                  <p>&bull; filename generation</p>
+                  <p>&bull; 3&times; fallback paths</p>
+                  <p>&bull; 2.5s safety timer</p>
+                  <p class="text-red-500 font-semibold mt-2">~104 lines, untestable in isolation</p>
+                </div>
+              </div>
+            </div>
+            <div>
+              <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">After &mdash; shallow onstop, deep RecordingFinalizer</p>
+              <div class="deep-bg rounded-lg border-2 border-indigo-500 p-4 flex gap-4 items-start" style="min-height:260px;">
+                <div class="shrink-0" style="width:80px;">
+                  <p class="text-xs uppercase text-indigo-400 mb-1">interface</p>
+                  <div class="border-2 border-indigo-400 rounded bg-indigo-950" style="height:25px;"></div>
+                  <p class="text-xs text-indigo-300 mt-1 leading-tight">finalizeRecording(chunks, opts)</p>
+                </div>
+                <div class="shrink-0" style="width:80px;">
+                  <p class="text-xs uppercase text-indigo-400 mb-1">impl</p>
+                  <div class="border border-indigo-600 rounded bg-indigo-950/50" style="height:205px;"></div>
+                  <p class="text-xs text-indigo-300 mt-1">RecordingFinalizer</p>
+                </div>
+                <div class="flex-1 text-xs text-indigo-300 space-y-1 pt-1">
+                  <p class="font-semibold text-indigo-200">onstop becomes 8 lines:</p>
+                  <p>clearTimeout(timer)</p>
+                  <p>resolve(await</p>
+                  <p>&nbsp;finalizeRecording(chunks, opts))</p>
+                  <p class="text-indigo-400 mt-2">RecordingFinalizer owns:</p>
+                  <p>&bull; decode + timeout</p>
+                  <p>&bull; encode dispatch</p>
+                  <p>&bull; take slicing</p>
+                  <p>&bull; all fallback logic</p>
+                  <p class="text-green-400 font-semibold mt-2">Node-testable with fake AudioBuffer</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="grid grid-cols-3 gap-6">
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Problem</p><p class="text-slate-600 text-sm">The onstop closure is 104 lines of sequential mutation bound to a live MediaRecorder. No part of it is testable without a real browser.</p></div>
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Solution</p><p class="text-slate-600 text-sm">Extract <strong>RecordingFinalizer</strong>: <span class="mono text-xs">finalizeRecording(chunks, opts) &rarr; TakeSet</span>. onstop becomes a thin adapter.</p></div>
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Wins</p>
+              <ul class="space-y-1">
+                <li class="win-bullet">&bull; <span>interface shrinks</span>: one call vs 104-line closure</li>
+                <li class="win-bullet">&bull; <span>locality</span>: encoding bugs concentrate in RecordingFinalizer</li>
+                <li class="win-bullet">&bull; <span>leverage</span>: testable with fake AudioBuffer in Node</li>
+                <li class="win-bullet">&bull; <span>two adapters</span>: real MediaRecorder + test fixture justify seam</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <hr class="border-slate-200"/>
+
+        <!-- C3 -->
+        <article id="c3">
+          <div class="flex flex-wrap items-center gap-3 mb-4">
+            <h2 class="text-lg font-bold text-slate-800">3. Seal the Save-to-Disk Seam</h2>
+            <span class="badge badge-strong">Strong</span>
+            <span class="tag">ports &amp; adapters</span>
+          </div>
+          <div class="mono text-xs text-slate-500 mb-4 space-y-0.5">
+            <div>static/app.js &mdash; saveTakeToDisk() &middot; blobToBase64() &middot; takeSavedListeners[]</div>
+            <div>session.py &mdash; PrompterSession.save_take() &middot; server.py &mdash; WebSocket dispatch("save_take")</div>
+          </div>
+          <div class="grid grid-cols-2 gap-4 mb-6">
+            <div>
+              <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Before &mdash; 4-hop base64 round-trip</p>
+              <div class="rounded-lg border border-slate-200 bg-white p-4" style="min-height:250px;">
+                <pre class="mermaid text-xs">
+flowchart TD
+  A["btn-save-disk"] --> B["blobToBase64()"]
+  B --> C["send save_take over WebSocket"]
+  C --> D["session.py: b64decode + write"]
+  D --> E["emit take_saved"]
+  E --> F["takeSavedListeners + 10s timeout"]
+  classDef leak stroke:#dc2626,stroke-width:2px;
+  class C,F leak
+                </pre>
+                <p class="text-xs text-red-500 mt-2">&bull; Server caps WebSocket at 2 MB &mdash; silently truncates video<br>&bull; base64 bloats blob by 33% in memory<br>&bull; 10s timeout is the only error signal</p>
+              </div>
+            </div>
+            <div>
+              <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">After &mdash; LocalFileSaver with two adapters</p>
+              <div class="deep-bg rounded-lg border-2 border-indigo-500 p-4" style="min-height:250px;">
+                <pre class="mermaid text-xs">
+flowchart TD
+  A["btn-save-disk"] --> B["LocalFileSaver.save(blob,filename)"]
+  B --> C{showSaveFilePicker?}
+  C -- yes --> D["File System Access API — zero server round-trip"]
+  C -- no --> E["HTTP POST /save — streaming multipart"]
+  E --> F["server.py: shutil.copyfileobj to recordings/"]
+  classDef deep stroke:#6366f1,stroke-width:2.5px;
+  class B deep
+                </pre>
+                <p class="text-xs text-indigo-300 mt-2">&bull; No base64. No 2 MB cap. No timeout promise.<br>&bull; Two real adapters justify the seam.</p>
+              </div>
+            </div>
+          </div>
+          <div class="grid grid-cols-3 gap-6">
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Problem</p><p class="text-slate-600 text-sm">Saving a take base64-encodes the entire blob, sends it over a 2 MB-capped WebSocket, and waits on a hand-rolled 10s timeout &mdash; three independent failure modes that silently eat large video files.</p></div>
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Solution</p><p class="text-slate-600 text-sm">Extract <strong>LocalFileSaver</strong>: prefer showSaveFilePicker (zero server round-trip), fall back to streaming HTTP POST. No base64. No cap. No timeout.</p></div>
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Wins</p>
+              <ul class="space-y-1">
+                <li class="win-bullet">&bull; <span>locality</span>: all save paths in one module</li>
+                <li class="win-bullet">&bull; <span>leverage</span>: eliminates FileReader, base64, timeout, listeners</li>
+                <li class="win-bullet">&bull; <span>interface shrinks</span>: save(blob, filename) &rarr; Promise&lt;bool&gt;</li>
+                <li class="win-bullet">&bull; <span>two adapters</span>: File System Access + HTTP POST justify seam</li>
+                <li class="win-bullet">&bull; <span>deletion test</span>: removing takeSavedListeners[] concentrates complexity</li>
+              </ul>
+            </div>
+          </div>
+          <div class="mt-4 adr-warn">
+            <strong>Note:</strong> docs/session_recording_lifecycle.md describes the base64/WebSocket flow as a feature. Adopting the HTTP POST adapter revises that &mdash; worth a quick doc update once the seam is established.
+          </div>
+        </article>
+
+        <hr class="border-slate-200"/>
+
+        <!-- C4 -->
+        <article id="c4">
+          <div class="flex flex-wrap items-center gap-3 mb-4">
+            <h2 class="text-lg font-bold text-slate-800">4. Concentrate the Export Review Modal State</h2>
+            <span class="badge badge-explore">Worth exploring</span>
+            <span class="tag">local-substitutable</span>
+          </div>
+          <div class="mono text-xs text-slate-500 mb-4">
+            static/app.js &mdash; openExportModal() &middot; closeExportModal() &middot; currentExportTakes[] &middot; activeModalObjectUrls[]
+          </div>
+          <div class="grid grid-cols-2 gap-4 mb-6">
+            <div>
+              <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Before &mdash; interface nearly as wide as implementation</p>
+              <div class="rounded-lg border border-slate-200 bg-white p-4 flex gap-4 items-start" style="min-height:250px;">
+                <div class="shrink-0" style="width:70px;">
+                  <p class="text-xs uppercase text-slate-400 mb-1">interface</p>
+                  <div class="bg-red-100 border border-red-300 rounded" style="height:155px;"></div>
+                  <p class="text-xs text-slate-400 mt-1 leading-tight">openExportModal(takes,mode,fmt)</p>
+                </div>
+                <div class="shrink-0" style="width:70px;">
+                  <p class="text-xs uppercase text-slate-400 mb-1">impl</p>
+                  <div class="bg-slate-200 border border-slate-300 rounded" style="height:185px;"></div>
+                </div>
+                <div class="flex-1 text-xs text-slate-500 space-y-1 pt-1">
+                  <p class="font-semibold text-red-600">openExportModal does:</p>
+                  <p>&bull; revokes old blob URLs</p>
+                  <p>&bull; creates new blob URLs</p>
+                  <p>&bull; mutates currentExportTakes (module scope)</p>
+                  <p>&bull; innerHTML injection</p>
+                  <p>&bull; registers 3 listener sets per open()</p>
+                  <p>&bull; hides/shows batch buttons</p>
+                  <p class="text-red-500 mt-2">Listeners capture stale takes[] from closure on each open</p>
+                </div>
+              </div>
+            </div>
+            <div>
+              <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">After &mdash; deep ExportSession module</p>
+              <div class="deep-bg rounded-lg border-2 border-indigo-500 p-4" style="min-height:250px;">
+                <div class="module-box deep-module mb-3">ExportSession</div>
+                <div class="text-xs text-indigo-300 mono space-y-1 mb-4 pl-2">
+                  <div>.open(takes, mode, fmt) &rarr; void</div>
+                  <div>.close()                &rarr; void</div>
+                  <div>.saveOne(idx)           &rarr; Promise&lt;bool&gt;</div>
+                  <div>.saveAll()              &rarr; Promise&lt;void&gt;</div>
+                  <div>.downloadZip()          &rarr; Promise&lt;void&gt;</div>
+                </div>
+                <div class="p-2 rounded bg-indigo-950 border border-indigo-700 text-xs text-indigo-200">
+                  Listeners wired once on construction, not per open().<br>
+                  currentExportTakes and activeModalObjectUrls live inside the module.
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="grid grid-cols-3 gap-6">
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Problem</p><p class="text-slate-600 text-sm">The Export Review modal is shallow: openExportModal is nearly as complex as its implementation. Three listener sets registered per open. State leaks across module scope.</p></div>
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Solution</p><p class="text-slate-600 text-sm">Extract <strong>ExportSession</strong>: constructor wires listeners once; open() updates internal state and refreshes DOM only. Blob URL lifecycle owned by the module.</p></div>
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Wins</p>
+              <ul class="space-y-1">
+                <li class="win-bullet">&bull; <span>interface shrinks</span>: 5 methods replaces 125-line function</li>
+                <li class="win-bullet">&bull; <span>locality</span>: object URL leaks concentrate in one module</li>
+                <li class="win-bullet">&bull; <span>leverage</span>: listener dedup removes double-fire risk</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <hr class="border-slate-200"/>
+
+        <!-- C5 -->
+        <article id="c5">
+          <div class="flex flex-wrap items-center gap-3 mb-4">
+            <h2 class="text-lg font-bold text-slate-800">5. Promote formatter.js Protected Terms to Config</h2>
+            <span class="badge badge-explore">Worth exploring</span>
+            <span class="tag">mock</span>
+          </div>
+          <div class="mono text-xs text-slate-500 mb-4">static/formatter.js &mdash; DEFAULT_PROTECTED_TERMS (lines 49&ndash;73)</div>
+          <div class="grid grid-cols-2 gap-4 mb-6">
+            <div>
+              <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Before</p>
+              <div class="rounded-lg border border-slate-200 bg-white p-4" style="min-height:200px;">
+                <div class="module-box shallow mb-3">formatter.js</div>
+                <div class="module-box note-box text-center mb-3">
+                  "Turbo Technics VTR100 EVO"<br>
+                  "exhaust gas recirculation"<br>
+                  "variable geometry turbocharger"<br>
+                  <span class="text-xs opacity-60">&hellip; 19 more client-specific terms baked into source</span>
+                </div>
+                <p class="text-xs text-red-500 mt-1">&bull; Terms belong to one client shoot<br>&bull; Wrong for any other production<br>&bull; Requires editing source to change</p>
+              </div>
+            </div>
+            <div>
+              <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">After</p>
+              <div class="deep-bg rounded-lg border-2 border-indigo-500 p-4" style="min-height:200px;">
+                <div class="module-box deep-module mb-3">formatter.js (domain-agnostic)</div>
+                <p class="text-xs text-indigo-300 text-center mb-3">formatScript(text, { protectedTerms })</p>
+                <div class="module-box mb-2">config.js / configStore</div>
+                <p class="text-xs text-indigo-300 text-center mb-3">script.protected_terms: string[]</p>
+                <p class="text-xs text-indigo-400">&bull; parseTokens() already accepts options.protectedTerms<br>&bull; Just wire it to the config store</p>
+              </div>
+            </div>
+          </div>
+          <div class="grid grid-cols-3 gap-6">
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Problem</p><p class="text-slate-600 text-sm">22 product names from one client shoot are hardcoded in formatter.js. The module interface is generic and deep, but its implementation leaks the domain of one production.</p></div>
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Solution</p><p class="text-slate-600 text-sm">Move DEFAULT_PROTECTED_TERMS to script.protected_terms in the config schema. parseTokens() already accepts options.protectedTerms &mdash; just wire it to the config store.</p></div>
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Wins</p>
+              <ul class="space-y-1">
+                <li class="win-bullet">&bull; <span>leverage</span>: formatter works across any production</li>
+                <li class="win-bullet">&bull; <span>interface depth</span>: module is truly domain-agnostic</li>
+                <li class="win-bullet">&bull; <span>locality</span>: term edits live in config, not source</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <hr class="border-slate-200"/>
+
+        <!-- C6 -->
+        <article id="c6">
+          <div class="flex flex-wrap items-center gap-3 mb-4">
+            <h2 class="text-lg font-bold text-slate-800">6. Extend Dual-Layer Export to the Video Path</h2>
+            <span class="badge badge-explore">Worth exploring</span>
+            <span class="tag">in-process</span>
+          </div>
+          <div class="mono text-xs text-slate-500 mb-4">
+            static/media.js &mdash; MediaSession.stopRecording() video fallback path (lines 972&ndash;984)
+          </div>
+          <div class="grid grid-cols-2 gap-4 mb-6">
+            <div>
+              <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Before &mdash; video path silently ignores sections[]</p>
+              <div class="rounded-lg border border-slate-200 bg-white p-4" style="min-height:230px;">
+                <pre class="mermaid text-xs">
+sequenceDiagram
+  participant app as app.js
+  participant ms as MediaSession
+  app->>ms: stopRecording({sections, dur})
+  Note over ms: isAudioOnly = false (video mode)
+  ms-->>app: {blob, takes:[masterOnly]}
+  Note over app: sections[] never consumed
+  Note over app: Export modal: 1 file only
+                </pre>
+              </div>
+            </div>
+            <div>
+              <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">After &mdash; section timestamps surfaced in modal</p>
+              <div class="deep-bg rounded-lg border-2 border-indigo-500 p-4" style="min-height:230px;">
+                <pre class="mermaid text-xs">
+sequenceDiagram
+  participant app as app.js
+  participant fin as RecordingFinalizer
+  app->>fin: finalize(chunks,{sections,'webm'})
+  fin-->>app: {master, sectionMarkers[]}
+  Note over app: ExportSession shows master +
+  Note over app: section times for Resolve cuts
+                </pre>
+              </div>
+            </div>
+          </div>
+          <div class="grid grid-cols-3 gap-6">
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Problem</p><p class="text-slate-600 text-sm">sections[] is passed to stopRecording in video mode but silently ignored &mdash; the fallback always returns one master blob, breaking the dual-layer export promise for video.</p></div>
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Solution</p><p class="text-slate-600 text-sm">Surface section timestamps as metadata in the Export Review modal ("Section [Intro]: 0:00 &ndash; 0:43"). Full video slicing can follow; the timestamps alone give DaVinci Resolve users the cut points they need.</p></div>
+            <div><p class="font-semibold text-slate-700 text-sm mb-1">Wins</p>
+              <ul class="space-y-1">
+                <li class="win-bullet">&bull; <span>locality</span>: video path explicitly handles or explains sections</li>
+                <li class="win-bullet">&bull; <span>leverage</span>: section metadata = Resolve-ready cut points</li>
+                <li class="win-bullet">&bull; <span>interface</span>: stopRecording contract consistent across modes</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+      </section>
+
+      <!-- TOP RECOMMENDATION -->
+      <section id="top-recommendation" class="mt-12">
+        <div class="deep-bg rounded-xl border-2 border-indigo-500 p-8">
+          <p class="text-xs text-indigo-400 uppercase tracking-widest mb-2">Top recommendation</p>
+          <h2 class="text-xl font-bold text-white mb-3">Start with Candidate 3 &mdash; Seal the Save-to-Disk Seam</h2>
+          <p class="text-indigo-200 text-sm max-w-2xl leading-relaxed">
+            The base64/WebSocket delivery path is the most immediate production risk: the server hard-caps WebSocket messages at 2&nbsp;MB, silently truncating any video take; the 10-second timeout is the only error signal; and the hand-rolled <span class="mono text-xs">takeSavedListeners[]</span> array is a concurrency accident. Extracting <strong>LocalFileSaver</strong> with <span class="mono text-xs">showSaveFilePicker &rarr; HTTP POST</span> fallback eliminates the cap, the base64 overhead, and the timeout &mdash; and it establishes a clean seam testable against both adapters independently. Everything downstream &mdash; the Export Review modal (C4) and dual-layer video export (C6) &mdash; gets simpler once this save seam is solid.
+          </p>
+          <div class="mt-5">
+            <a href="#c3" class="inline-block px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold rounded-lg transition">&uarr; Back to Candidate 3</a>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </body>
+</html>

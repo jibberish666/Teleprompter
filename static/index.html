@@ -37,6 +37,10 @@
         <svg class="w-3.5 h-3.5 text-emerald-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z"/></svg>
         <span>Rehearse</span>
       </button>
+      <button id="btn-retake" class="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded shadow transition hidden items-center gap-1.5 cursor-pointer" title="Re-take current section (Hotkey: R)">
+        <svg class="w-3.5 h-3.5 text-amber-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        <span id="btn-retake-text">Re-take Section</span>
+      </button>
       <button id="btn-start" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded shadow transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-indigo-600" disabled>Start Session</button>
       <button id="btn-stop" class="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded shadow hidden transition">Stop & Save Video</button>
     </div>
@@ -126,6 +130,13 @@
           <input type="checkbox" id="opt-mirror" class="rounded bg-gray-800 border-gray-700">
         </div>
 
+        <div class="flex justify-between items-center pt-1">
+          <label for="opt-retake-hotkey" class="text-gray-400">Re-take Hotkey</label>
+          <div class="flex items-center gap-1.5">
+            <input type="text" id="opt-retake-hotkey" value="R" maxlength="1" class="w-10 text-center uppercase bg-gray-900 border border-gray-700 rounded px-1 py-0.5 text-xs text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-500 cursor-pointer" title="Key to rewind & re-take active section">
+          </div>
+        </div>
+
         <div class="border-t border-gray-800 pt-3 mt-1">
           <div class="font-bold text-gray-300 text-xs uppercase tracking-wider mb-2 flex items-center justify-between">
             <span>Audio Source</span>
@@ -205,6 +216,21 @@
             <select id="opt-record-format" class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-indigo-500 cursor-pointer">
             </select>
             <div id="format-desc" class="text-[10px] text-gray-400 mt-1 leading-snug"></div>
+          </div>
+
+          <div id="save-destination-group" class="pt-1 border-t border-gray-800">
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-gray-400 text-xs">Save Destination</label>
+              <button id="btn-clear-folder" type="button" class="text-[10px] text-gray-500 hover:text-gray-300 transition cursor-pointer hidden" title="Reset to Downloads">Reset</button>
+            </div>
+            <button id="btn-choose-folder" type="button" class="w-full px-2.5 py-1.5 bg-gray-900 hover:bg-gray-800 text-gray-200 text-xs font-medium rounded border border-gray-700 flex items-center justify-between transition cursor-pointer" title="Pre-define where recordings are saved automatically without dialogs">
+              <span class="flex items-center gap-1.5 truncate">
+                <svg class="w-3.5 h-3.5 text-indigo-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+                <span id="lbl-save-folder" class="truncate font-mono text-[11px] text-indigo-300">Downloads (Default)</span>
+              </span>
+              <span class="text-[10px] text-indigo-400 shrink-0 underline">Choose Folder</span>
+            </button>
+            <p id="save-folder-hint" class="text-[10px] text-gray-500 mt-1 leading-tight">Pick any folder to auto-save recordings instantly on Stop.</p>
           </div>
         </div>
       </div>
@@ -388,6 +414,57 @@
       <div class="p-4 border-t border-gray-800 flex justify-between items-center bg-gray-950/70">
         <span id="difficult-modal-status" class="text-[11px] text-green-400 opacity-0 transition-opacity">Saved & Applied ✓</span>
         <button id="btn-save-difficult-words" type="button" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg text-xs transition shadow cursor-pointer">Done</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Section Export Modal -->
+  <div id="modal-export" class="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm hidden transition-opacity duration-200">
+    <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-xl mx-4 overflow-hidden flex flex-col max-h-[90vh] text-gray-200">
+      
+      <!-- Header -->
+      <div class="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-950/70">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-400/40 flex items-center justify-center text-indigo-400">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold text-white">Session Export & Section Takes</h3>
+            <p class="text-[11px] text-gray-400">Save clean individual takes or download everything bundled in a single ZIP</p>
+          </div>
+        </div>
+        <button id="btn-close-export-modal" type="button" class="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800 transition cursor-pointer">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <!-- Body -->
+      <div class="p-5 space-y-3 overflow-y-auto text-xs">
+        <div class="flex items-center justify-between text-[11px] text-gray-400 px-1">
+          <span>Recorded Takes & Slices</span>
+          <span id="export-mode-badge" class="font-mono text-[10px] px-2 py-0.5 rounded bg-gray-800 border border-gray-700 text-gray-300">AUDIO (WAV)</span>
+        </div>
+
+        <div id="export-takes-list" class="space-y-2">
+          <!-- Dynamically populated rows -->
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="p-4 border-t border-gray-800 flex justify-between items-center bg-gray-950/70">
+        <span id="export-summary-text" class="text-[11px] text-gray-400">3 files ready to export</span>
+        <div class="flex items-center gap-2">
+          <button id="btn-dismiss-export-modal" type="button" class="px-3.5 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white font-medium rounded-lg text-xs transition cursor-pointer">Close</button>
+          <button id="btn-save-all-disk" type="button" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg text-xs transition shadow flex items-center gap-1.5 cursor-pointer">
+            <svg class="w-4 h-4 text-indigo-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/></svg>
+            <span>Save All to recordings/</span>
+          </button>
+          <button id="btn-download-all-zip" type="button" class="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-200 font-semibold rounded-lg text-xs transition border border-gray-700 flex items-center gap-1.5 cursor-pointer">
+            <svg class="w-4 h-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            <span>Download All (.ZIP)</span>
+          </button>
+        </div>
       </div>
 
     </div>

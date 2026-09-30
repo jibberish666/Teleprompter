@@ -11,12 +11,18 @@
     : null;
 
   const mediaSession = new TeleprompterMedia.MediaSession();
+  if (typeof window !== 'undefined') {
+    window.mediaSession = mediaSession;
+  }
   let isPrompting = false;
   let isRehearsal = false;
 
   // Transcript state
   let linesData = [];
   let allWords = [];
+  let parsedSections = [];
+  let currentActiveSectionId = null;
+  let sessionStartTime = 0;
   let currentWordIndex = 0;
   let currentLineIndex = 0;
 
@@ -53,6 +59,35 @@
   const vuText = document.getElementById('vu-text');
   const vuSource = document.getElementById('vu-source');
   const btnRefreshAudioDevices = document.getElementById('btn-refresh-audio-devices');
+  const btnRetake = document.getElementById('btn-retake');
+  const btnRetakeText = document.getElementById('btn-retake-text');
+  const optRetakeHotkey = document.getElementById('opt-retake-hotkey');
+
+  const modalExport = document.getElementById('modal-export');
+  const btnCloseExportModal = document.getElementById('btn-close-export-modal');
+  const btnDismissExportModal = document.getElementById('btn-dismiss-export-modal');
+  const btnDownloadAllZip = document.getElementById('btn-download-all-zip');
+  const btnSaveAllDisk = document.getElementById('btn-save-all-disk');
+  const exportTakesList = document.getElementById('export-takes-list');
+  const exportSummaryText = document.getElementById('export-summary-text');
+  const exportModeBadge = document.getElementById('export-mode-badge');
+  const btnChooseFolder = document.getElementById('btn-choose-folder');
+  const btnClearFolder = document.getElementById('btn-clear-folder');
+  const lblSaveFolder = document.getElementById('lbl-save-folder');
+  const saveFolderHint = document.getElementById('save-folder-hint');
+
+  let retakeHotkey = (configStore && configStore.get('ui.retake_hotkey')) || 'r';
+  if (optRetakeHotkey) {
+    optRetakeHotkey.value = retakeHotkey.toUpperCase();
+    optRetakeHotkey.addEventListener('input', (e) => {
+      const val = (e.target.value || '').trim().toLowerCase().slice(0, 1) || 'r';
+      retakeHotkey = val;
+      optRetakeHotkey.value = val.toUpperCase();
+      if (configStore) {
+        configStore.set('ui.retake_hotkey', retakeHotkey);
+      }
+    });
+  }
 
   // MediaSession event hooks
   mediaSession.onVuLevel = (levelPercent) => {
@@ -902,12 +937,14 @@
   } = TeleprompterMedia;
 
   function updateStopButtonText() {
+    if (!btnStop) return;
+    const isHidden = btnStop.classList.contains('hidden') || !isPrompting;
     if (isRehearsal) {
       btnStop.textContent = 'Finish Rehearsal';
-      btnStop.className = 'px-4 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold rounded shadow transition cursor-pointer';
+      btnStop.className = 'px-4 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold rounded shadow transition cursor-pointer' + (isHidden ? ' hidden' : '');
       return;
     }
-    btnStop.className = 'px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded shadow transition cursor-pointer';
+    btnStop.className = 'px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded shadow transition cursor-pointer' + (isHidden ? ' hidden' : '');
     const mode = optRecordMode ? optRecordMode.value : 'video';
     if (mode === 'audio') {
       const fmt = (activeAudioFormat || 'mp3').toUpperCase();
@@ -1001,6 +1038,10 @@
         }
         break;
       case 'audio_device_changed':
+        if (isPrompting) {
+          console.log('[AUDIO] Ignoring background audio_device_changed event while session is active');
+          break;
+        }
         updateAudioSourceUI(msg.device);
         const switchedDev = availableAudioDevices.find((d) => String(d.id) === String(msg.device));
         if (switchedDev) {
@@ -1026,6 +1067,18 @@
         break;
       case 'rehearsal_summary':
         onRehearsalSummary(msg);
+        break;
+      case 'take_saved':
+        if (msg.success) {
+          setBadge(vadStatus, 'SAVED TO DISK', 'bg-emerald-950 text-emerald-400 border-emerald-500/30');
+          speechHud.textContent = `Saved ${msg.filename} to recordings/ folder!`;
+        } else {
+          setBadge(vadStatus, 'ERROR', 'bg-red-950 text-red-400 border-red-500/30');
+          speechHud.textContent = `⚠ Failed to save ${msg.filename}: ${msg.error}`;
+        }
+        takeSavedListeners.forEach((fn) => {
+          try { fn(msg); } catch (_) {}
+        });
         break;
       case 'error':
         speechHud.textContent = '⚠ ' + msg.message;
@@ -1098,7 +1151,11 @@
       }
     }
     if (msg.running === false && !isPrompting) {
-      speechHud.textContent = 'Session ended – recording saved.';
+      if (vadStatus.textContent !== 'SAVED' && !vadStatus.textContent.includes('SAVED') && vadStatus.textContent !== 'ENCODING…') {
+        if (activeRecordMode === 'off' || !mediaSession.mediaRecorder || mediaSession.mediaRecorder.state === 'inactive') {
+          speechHud.textContent = 'Session ended.';
+        }
+      }
     }
     updateStartButton();
   }
@@ -1320,7 +1377,12 @@
   // ---- Automatic Teleprompter Script Phrasing & Formatting -----------------
   function formatScriptForPrompter(text) {
     if (typeof TeleprompterFormatter !== 'undefined') {
-      return TeleprompterFormatter.formatScript(text);
+      // C5: wire script.protected_terms from config; empty = formatter uses its defaults
+      const configTerms = configStore ? configStore.get('script.protected_terms') : null;
+      const opts = (Array.isArray(configTerms) && configTerms.length > 0)
+        ? { protectedTerms: configTerms }
+        : {};
+      return TeleprompterFormatter.formatScript(text, opts);
     }
     return text;
   }
@@ -1417,13 +1479,22 @@
     }
 
     if (typeof TeleprompterFormatter !== 'undefined') {
-      const tokenResult = TeleprompterFormatter.parseTokens(rawText);
+      // C5: wire script.protected_terms from config; empty = formatter uses its defaults
+      const configTerms = configStore ? configStore.get('script.protected_terms') : null;
+      const opts = (Array.isArray(configTerms) && configTerms.length > 0)
+        ? { protectedTerms: configTerms }
+        : {};
+      const tokenResult = TeleprompterFormatter.parseTokens(rawText, opts);
       linesData = tokenResult.lines;
       allWords = tokenResult.allWords;
+      parsedSections = tokenResult.sections || [];
     } else {
       linesData = [];
       allWords = [];
+      parsedSections = [];
     }
+    // Rebuild SectionTimeline whenever parsedSections is repopulated (C1)
+    sectionTimeline = new SectionTimeline(parsedSections, () => (Date.now() - sessionStartTime) / 1000);
 
     if (linesData.length === 0 || allWords.length === 0) {
       linesContainer.innerHTML = `<p class="prompter-line text-gray-400 italic">Paste script & press Start Session...</p>`;
@@ -1442,6 +1513,9 @@
     });
 
     linesContainer.innerHTML = linesData.map((line) => {
+      if (line.isSectionHeader) {
+        return `<div id="line-${line.lineIdx}" class="prompter-line prompter-line-section select-none"><span class="prompter-section-pill">[${line.sectionTitle}]</span></div>`;
+      }
       if (line.isBlank) {
         return `<div id="line-${line.lineIdx}" class="prompter-line prompter-line-blank select-none"><span class="inline-block w-8 h-[2px] bg-indigo-400/50 rounded-full"></span></div>`;
       }
@@ -1473,6 +1547,9 @@
     currentWordIndex = 0;
     currentLineIndex = 0;
     updateHighlighting(0);
+    if (parsedSections.length > 0 && btnRetakeText) {
+      btnRetakeText.textContent = `Re-take [${parsedSections[0].title}]`;
+    }
   }
 
   // ---- Highlighting & scrolling --------------------------------------------
@@ -1487,6 +1564,10 @@
 
     currentWordIndex = wordIndex;
     currentLineIndex = activeWordObj.lineIdx;
+
+    if (parsedSections.length > 0 && activeWordObj.sectionId) {
+      handleSectionWordProgress(activeWordObj);
+    }
 
     const wordSpan = document.getElementById(`w-${wordIndex}`);
     if (wordSpan) wordSpan.classList.add('word-active');
@@ -1509,18 +1590,169 @@
     scrollingContent.style.transform = `translateY(${translateY}px)`;
   }
 
+  // ---- SectionTimeline (C1) -------------------------------------------------
+  // Owns all startSec / endSec mutation behind a 4-method interface.
+  // Callers never touch parsedSections timestamps directly.
+  class SectionTimeline {
+    constructor(sections, getElapsedSec) {
+      // sections[] is the shared parsedSections array (plain objects).
+      // Mutation is concentrated here; all other code reads via getSectionMarkers().
+      this._sections = sections;
+      this._getElapsedSec = getElapsedSec; // () => seconds since session start
+      this._activeId = null;
+    }
+
+    // Called on every word highlight when sections are active.
+    wordSeen(word, isSessionActive) {
+      const secId = word.sectionId;
+      if (!secId) return;
+      const nowSec = this._getElapsedSec();
+
+      if (secId !== this._activeId) {
+        // Close the previously active section (if any).
+        if (this._activeId && isSessionActive) {
+          const prev = this._sections.find((s) => s.id === this._activeId);
+          if (prev && prev.startSec !== null && prev.endSec === null) {
+            prev.endSec = nowSec;
+          }
+        }
+        this._activeId = secId;
+        // Open the newly active section.
+        const cur = this._sections.find((s) => s.id === secId);
+        if (cur && isSessionActive && cur.startSec === null) {
+          cur.startSec = Math.max(0, nowSec - 0.1);
+        }
+        if (btnRetakeText && cur) {
+          btnRetakeText.textContent = `Re-take [${cur.title}]`;
+        }
+      } else if (isSessionActive) {
+        // Same section — ensure startSec is set if it somehow isn't yet.
+        const cur = this._sections.find((s) => s.id === secId);
+        if (cur && cur.startSec === null) {
+          cur.startSec = Math.max(0, nowSec - 0.1);
+        }
+      }
+    }
+
+    // Resets timestamps for the current (or first) section and returns its startIndex for seek.
+    retake() {
+      const target = this._sections.find((s) => s.id === this._activeId) || this._sections[0];
+      if (!target || target.startIndex === null) return null;
+      target.startSec = null;
+      target.endSec = null;
+      return { seekIndex: target.startIndex, title: target.title };
+    }
+
+    // Closes the currently active section at the given elapsed second.
+    close(nowSec) {
+      if (!this._activeId) return;
+      const sec = this._sections.find((s) => s.id === this._activeId);
+      if (sec && sec.startSec !== null && sec.endSec === null) {
+        sec.endSec = nowSec;
+      }
+      this._activeId = null;
+    }
+
+    // Returns the sections array (used by stopRecording and external readers).
+    getSectionMarkers() {
+      return this._sections;
+    }
+
+    // Resets all timestamps on all sections (called at session start).
+    reset(activeId) {
+      this._sections.forEach((s) => { s.startSec = null; s.endSec = null; });
+      this._activeId = activeId || null;
+    }
+
+    get activeId() { return this._activeId; }
+    set activeId(id) { this._activeId = id; }
+  }
+
+  // sectionTimeline is initialized when parsedSections is populated.
+  let sectionTimeline = new SectionTimeline(parsedSections, () => (Date.now() - sessionStartTime) / 1000);
+
+  // ---- Thin adapters (preserve external call sites unchanged) ---------------
+  function handleSectionWordProgress(targetWord) {
+    sectionTimeline.wordSeen(targetWord, isPrompting);
+    currentActiveSectionId = sectionTimeline.activeId;
+  }
+
+  function triggerSectionRetake() {
+    if (!isPrompting || parsedSections.length === 0) return;
+    const result = sectionTimeline.retake();
+    if (!result) return;
+
+    currentWordIndex = result.seekIndex;
+    updateHighlighting(currentWordIndex);
+    send({ type: 'seek', word_index: currentWordIndex });
+
+    setBadge(vadStatus, 'RE-TAKE READY', 'bg-amber-950 text-amber-300 border-amber-500/40');
+    speechHud.textContent = `Re-taking [${result.title}]… speak from line start.`;
+  }
+
+  if (btnRetake) {
+    btnRetake.addEventListener('click', triggerSectionRetake);
+  }
+
   // ---- Start / Rehearse / Stop -----------------------------------------------
   if (btnRehearse) {
     btnRehearse.addEventListener('click', async () => {
       if (isPrompting) return;
       if (!transcriptInput.value.trim()) return;
 
+      try {
+        parseAndRenderTranscript();
+        currentWordIndex = 0;
+        isPrompting = true;
+        isRehearsal = true;
+
+        if (optRecordMode) optRecordMode.disabled = true;
+        if (optRecordFormat) optRecordFormat.disabled = true;
+
+        if (!mediaSession.audioStream || !mediaSession.audioStream.active || !mediaSession.audioStream.getAudioTracks().some((t) => t.readyState === 'live')) {
+          await initAudio();
+        }
+        await mediaSession.ensureAudioContext();
+
+        if (activeAudioSource === 'browser') {
+          startBrowserAudioStream();
+        }
+
+        recIndicator.classList.add('hidden');
+
+        send({ type: 'start', words: allWords.map((w) => w.original), rehearsal: true, wpm: 140, audio_device: activeAudioSource });
+
+        updateStopButtonText();
+        btnStart.classList.add('hidden');
+        btnRehearse.classList.add('hidden');
+        btnStop.classList.remove('hidden');
+        updateHighlighting(0);
+        updateStartButton();
+        setBadge(vadStatus, 'REHEARSAL (CATCHING FUMBLES)', 'bg-emerald-950 text-emerald-400 border-emerald-500/30');
+        speechHud.textContent = 'Trial read-through: read naturally. Skipped, stumbled, or repeated words will be caught!';
+      } catch (err) {
+        isPrompting = false;
+        isRehearsal = false;
+        if (optRecordMode) optRecordMode.disabled = false;
+        if (optRecordFormat) optRecordFormat.disabled = false;
+        updateStartButton();
+        speechHud.textContent = '⚠ Error starting rehearsal: ' + (err && err.message ? err.message : String(err));
+        setBadge(vadStatus, 'ERROR', 'bg-red-950 text-red-400 border-red-500/30');
+      }
+    });
+  }
+
+  btnStart.addEventListener('click', async () => {
+    if (isPrompting) return;
+    if (!transcriptInput.value.trim()) return;
+
+    try {
       parseAndRenderTranscript();
       currentWordIndex = 0;
       isPrompting = true;
-      isRehearsal = true;
-      recordedChunks = [];
+      isRehearsal = false;
 
+      activeRecordMode = optRecordMode ? optRecordMode.value : 'video';
       if (optRecordMode) optRecordMode.disabled = true;
       if (optRecordFormat) optRecordFormat.disabled = true;
 
@@ -1533,105 +1765,129 @@
         startBrowserAudioStream();
       }
 
-      recIndicator.classList.add('hidden');
+      if (activeRecordMode !== 'off') {
+        try {
+          console.log('[DEBUG START] Starting recording. mode:', activeRecordMode, 'audioFormat:', activeAudioFormat, 'videoFormat:', activeVideoFormat);
+          await mediaSession.startRecording({
+            mode: activeRecordMode,
+            audioFormat: activeAudioFormat,
+            videoFormat: activeVideoFormat
+          });
+          console.log('[DEBUG START] Recording started successfully. mediaRecorder state:', mediaSession.mediaRecorder ? mediaSession.mediaRecorder.state : 'null');
+          recIndicator.classList.remove('hidden');
+        } catch (recErr) {
+          console.error('[DEBUG START ERROR] Failed to start recording:', recErr);
+          speechHud.textContent = '⚠ Recording could not start: ' + (recErr && recErr.message ? recErr.message : String(recErr));
+          setBadge(vadStatus, 'REC ERROR', 'bg-red-950 text-red-400 border-red-500/30');
+          recIndicator.classList.add('hidden');
+        }
+      } else {
+        recIndicator.classList.add('hidden');
+      }
 
-      send({ type: 'start', words: allWords.map((w) => w.original), rehearsal: true, wpm: 140, audio_device: activeAudioSource });
+      send({ type: 'start', words: allWords.map((w) => w.original), wpm: 140, audio_device: activeAudioSource });
+
+      sessionStartTime = Date.now();
+      currentActiveSectionId = null;
+      sectionTimeline.reset(parsedSections[0] ? parsedSections[0].id : null);
+      if (parsedSections.length > 0) {
+        if (btnRetake) {
+          btnRetake.classList.remove('hidden');
+          btnRetake.classList.add('flex');
+          if (btnRetakeText) {
+            btnRetakeText.textContent = `Re-take [${parsedSections[0].title}]`;
+          }
+        }
+      } else {
+        if (btnRetake) {
+          btnRetake.classList.add('hidden');
+          btnRetake.classList.remove('flex');
+        }
+      }
 
       updateStopButtonText();
       btnStart.classList.add('hidden');
-      btnRehearse.classList.add('hidden');
+      if (btnRehearse) btnRehearse.classList.add('hidden');
       btnStop.classList.remove('hidden');
       updateHighlighting(0);
       updateStartButton();
-      setBadge(vadStatus, 'REHEARSAL (CATCHING FUMBLES)', 'bg-emerald-950 text-emerald-400 border-emerald-500/30');
-      speechHud.textContent = 'Trial read-through: read naturally. Skipped, stumbled, or repeated words will be caught!';
-    });
-  }
-
-  btnStart.addEventListener('click', async () => {
-    if (isPrompting) return;
-    if (!transcriptInput.value.trim()) return;
-
-    parseAndRenderTranscript();
-    currentWordIndex = 0;
-    isPrompting = true;
-    isRehearsal = false;
-    recordedChunks = [];
-
-    activeRecordMode = optRecordMode ? optRecordMode.value : 'video';
-    if (optRecordMode) optRecordMode.disabled = true;
-    if (optRecordFormat) optRecordFormat.disabled = true;
-
-    if (!mediaSession.audioStream || !mediaSession.audioStream.active || !mediaSession.audioStream.getAudioTracks().some((t) => t.readyState === 'live')) {
-      await initAudio();
-    }
-    await mediaSession.ensureAudioContext();
-
-    if (activeAudioSource === 'browser') {
-      startBrowserAudioStream();
-    }
-
-    if (activeRecordMode !== 'off') {
-      try {
-        await mediaSession.startRecording({
-          mode: activeRecordMode,
-          audioFormat: activeAudioFormat,
-          videoFormat: activeVideoFormat
-        });
-        recIndicator.classList.remove('hidden');
-      } catch (_) {
-        speechHud.textContent = 'Recording unavailable – running sync-only.';
-        recIndicator.classList.add('hidden');
+      setBadge(vadStatus, 'LISTENING (LOCAL WHISPER)', 'bg-indigo-950 text-indigo-400 border-indigo-500/30');
+      if (recIndicator.classList.contains('hidden') && activeRecordMode !== 'off') {
+        speechHud.textContent = 'Speech sync listening, but recording is inactive (check camera/mic permissions).';
+      } else {
+        speechHud.textContent = 'Speak into the mic to scroll in sync…';
       }
-    } else {
-      recIndicator.classList.add('hidden');
+    } catch (err) {
+      isPrompting = false;
+      if (optRecordMode) optRecordMode.disabled = false;
+      if (optRecordFormat) optRecordFormat.disabled = false;
+      updateStartButton();
+      speechHud.textContent = '⚠ Error starting session: ' + (err && err.message ? err.message : String(err));
+      setBadge(vadStatus, 'ERROR', 'bg-red-950 text-red-400 border-red-500/30');
     }
-
-    send({ type: 'start', words: allWords.map((w) => w.original), wpm: 140, audio_device: activeAudioSource });
-
-    updateStopButtonText();
-    btnStart.classList.add('hidden');
-    if (btnRehearse) btnRehearse.classList.add('hidden');
-    btnStop.classList.remove('hidden');
-    updateHighlighting(0);
-    updateStartButton();
-    setBadge(vadStatus, 'LISTENING (LOCAL WHISPER)', 'bg-indigo-950 text-indigo-400 border-indigo-500/30');
-    speechHud.textContent = 'Speak into the mic to scroll in sync…';
   });
 
   btnStop.addEventListener('click', () => {
+    console.log('[DEBUG STOP] clicked. activeRecordMode:', activeRecordMode, 'mediaRecorder:', mediaSession.mediaRecorder ? mediaSession.mediaRecorder.state : 'null');
     isPrompting = false;
     stopBrowserAudioStream();
     if (optRecordMode) optRecordMode.disabled = false;
     if (optRecordFormat) optRecordFormat.disabled = false;
 
+    if (btnRetake) {
+      btnRetake.classList.add('hidden');
+      btnRetake.classList.remove('flex');
+    }
+
+    const sessionEndTime = Date.now();
+    const totalSessionSec = (sessionEndTime - sessionStartTime) / 1000;
+    // Close the active section via SectionTimeline (C1)
+    sectionTimeline.close(totalSessionSec);
+    currentActiveSectionId = null;
+
     send({ type: 'stop' });
 
     if (activeRecordMode !== 'off' && mediaSession.mediaRecorder && mediaSession.mediaRecorder.state !== 'inactive') {
-      mediaSession.stopRecording((msg) => {
-        setBadge(vadStatus, 'ENCODING…', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
-        speechHud.textContent = msg;
-      }).then((result) => {
+      console.log('[DEBUG STOP] Calling mediaSession.stopRecording...');
+      mediaSession.stopRecording({
+        sections: sectionTimeline.getSectionMarkers(),
+        sessionDurationSec: totalSessionSec,
+        onProgress: (msg) => {
+          console.log('[DEBUG STOP] Progress:', msg);
+          setBadge(vadStatus, 'ENCODING…', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
+          speechHud.textContent = msg;
+        }
+      }).then(async (result) => {
+        console.log('[DEBUG STOP] stopRecording resolved with:', result);
         if (!result) return;
-        const { blob, extension, filename } = result;
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => {
-          document.body.removeChild(a);
-          window.URL.revokeObjectURL(url);
-        }, 150);
+        const { blob, extension, filename, takes } = result;
 
-        setBadge(vadStatus, 'SAVED', 'bg-green-950 text-green-400 border-green-500/30');
-        speechHud.textContent = activeRecordMode === 'audio'
-          ? `Session audio saved (${extension.toUpperCase()})!`
-          : `Session video saved (${extension.toUpperCase()})!`;
+        if (!blob || blob.size === 0) {
+          setBadge(vadStatus, 'STOPPED', 'bg-gray-800 text-gray-400 border-gray-700');
+          speechHud.textContent = 'Recording ended (no audio/video frames captured). Check microphone & camera permissions in Brave.';
+          return;
+        }
+
+        const effectiveMode = (activeRecordMode === 'audio' || !mediaSession.hasRecordedVideoTrack) ? 'audio' : 'video';
+        const exportTakes = (takes && takes.length > 0) ? takes : [
+          {
+            filename: filename,
+            title: effectiveMode === 'audio' ? 'Master Session Audio' : 'Master Session Video',
+            duration: totalSessionSec,
+            blob: blob,
+            isMaster: true
+          }
+        ];
+
+        setBadge(vadStatus, 'READY TO EXPORT', 'bg-indigo-950 text-indigo-400 border-indigo-500/30');
+        speechHud.textContent = 'Recording stopped. Choose your export options below.';
+
+        // Present export modal with all takes and master file
+        openExportModal(exportTakes, effectiveMode, extension);
       }).catch((err) => {
         console.error('Error saving recording:', err);
+        setBadge(vadStatus, 'ERROR', 'bg-red-950 text-red-400 border-red-500/30');
+        speechHud.textContent = '⚠ Error saving recording: ' + (err && err.message ? err.message : String(err));
       });
     } else {
       if (isRehearsal) {
@@ -1640,7 +1896,9 @@
         speechHud.textContent = `Trial complete! ${count} fumbled ${count === 1 ? 'word' : 'words'} highlighted for your live take.`;
       } else {
         setBadge(vadStatus, 'STOPPED', 'bg-gray-800 text-gray-400 border-gray-700');
-        speechHud.textContent = 'Session ended.';
+        speechHud.textContent = activeRecordMode === 'off'
+          ? 'Session ended (sync-only).'
+          : 'Session ended (no recording was active).';
       }
     }
 
@@ -1653,9 +1911,19 @@
     updateStartButton();
   });
 
-  // ---- Keyboard manual stepping (local override + backend sync) ------------
+  // ---- Keyboard manual stepping & Hotkeys ---------------------------------
   window.addEventListener('keydown', (e) => {
-    if (document.activeElement === transcriptInput) return;
+    const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+    if (activeTag === 'textarea' || activeTag === 'input') return;
+
+    if (e.key.toLowerCase() === retakeHotkey.toLowerCase()) {
+      if (isPrompting && parsedSections.length > 0) {
+        e.preventDefault();
+        triggerSectionRetake();
+      }
+      return;
+    }
+
     if (e.code === 'ArrowDown' && allWords.length) {
       currentWordIndex = Math.min(allWords.length - 1, currentWordIndex + 1);
       updateHighlighting(currentWordIndex);
@@ -1685,6 +1953,10 @@
       if (allWords.length > 0) {
         currentWordIndex = 0;
         currentLineIndex = 0;
+        currentActiveSectionId = parsedSections[0] ? parsedSections[0].id : null;
+        if (parsedSections.length > 0 && btnRetakeText) {
+          btnRetakeText.textContent = `Re-take [${parsedSections[0].title}]`;
+        }
         updateHighlighting(0);
         send({ type: 'seek', word_index: 0 });
       } else {
@@ -1693,6 +1965,377 @@
       speechHud.textContent = 'Script reset to start.';
     });
   }
+
+  // ---- Export Modal & Delivery Experience ------------------------------------
+  function formatDuration(sec) {
+    const s = Math.max(0, Math.round(sec));
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return `${m}:${String(rem).padStart(2, '0')}`;
+  }
+
+  // ---- LocalFileSaver --------------------------------------------------------
+  // Handles saving files directly to a pre-defined folder (if chosen via showDirectoryPicker)
+  // or falls back to direct browser download (saving to ~/Downloads with 0 prompts).
+  const LocalFileSaver = (() => {
+    let _dirHandle = null;
+
+    function setDirectoryHandle(handle) {
+      _dirHandle = handle;
+    }
+
+    function getDirectoryHandle() {
+      return _dirHandle;
+    }
+
+    async function save(blob, filename) {
+      // 1. If user defined a save folder in advance, write directly into that folder handle (zero dialogs!)
+      if (_dirHandle) {
+        try {
+          const fileHandle = await _dirHandle.getFileHandle(filename, { create: true });
+          const writable = await fileHandle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          return { ok: true, method: 'directory', folder: _dirHandle.name };
+        } catch (dirErr) {
+          console.warn('Failed writing to predefined folder handle, falling back to direct download:', dirErr);
+        }
+      }
+
+      // 2. Direct browser download (saves straight to ~/Downloads without blocking popups)
+      downloadBlob(blob, filename);
+      return { ok: true, method: 'download', folder: 'Downloads' };
+    }
+
+    return { save, setDirectoryHandle, getDirectoryHandle };
+  })();
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.rel = 'noopener';
+    a.style.position = 'fixed';
+    a.style.left = '-9999px';
+    a.style.top = '-9999px';
+    a.style.opacity = '0';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      try {
+        if (a.parentNode) document.body.removeChild(a);
+      } catch (_) {}
+      window.URL.revokeObjectURL(url);
+    }, 60000);
+    return true;
+  }
+
+  // Pre-defined Save Destination Folder Controls
+  if (btnChooseFolder) {
+    btnChooseFolder.addEventListener('click', async () => {
+      if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
+        try {
+          const handle = await window.showDirectoryPicker({
+            id: 'teleprompter_save_dir',
+            mode: 'readwrite',
+          });
+          LocalFileSaver.setDirectoryHandle(handle);
+          if (lblSaveFolder) lblSaveFolder.textContent = handle.name;
+          if (btnClearFolder) btnClearFolder.classList.remove('hidden');
+          if (saveFolderHint) {
+            saveFolderHint.textContent = `Auto-saving to folder "${handle.name}" on Stop.`;
+            saveFolderHint.className = 'text-[10px] text-green-400 mt-1 leading-snug font-medium';
+          }
+        } catch (err) {
+          if (err.name !== 'AbortError') console.warn('showDirectoryPicker error:', err);
+        }
+      } else {
+        alert('Directory picker is not supported in this browser. Recordings will save to your default Downloads folder.');
+      }
+    });
+  }
+
+  if (btnClearFolder) {
+    btnClearFolder.addEventListener('click', (e) => {
+      e.stopPropagation();
+      LocalFileSaver.setDirectoryHandle(null);
+      if (lblSaveFolder) lblSaveFolder.textContent = 'Downloads (Default)';
+      btnClearFolder.classList.add('hidden');
+      if (saveFolderHint) {
+        saveFolderHint.textContent = 'Pick any folder to auto-save recordings instantly on Stop.';
+        saveFolderHint.className = 'text-[10px] text-gray-500 mt-1 leading-tight';
+      }
+    });
+  }
+
+  async function saveBlobWithDialog(blob, filename) {
+    const ext = (filename.split('.').pop() || '').toLowerCase();
+    
+    // Sanitize MIME type: strip parameter attributes (e.g. ";codecs=...") to comply with Chromium/Brave File System Access API
+    let rawMime = (blob && blob.type) ? blob.type.split(';')[0].trim().toLowerCase() : '';
+    if (!rawMime || rawMime === 'application/octet-stream') {
+      if (ext === 'mp3') rawMime = 'audio/mpeg';
+      else if (ext === 'wav') rawMime = 'audio/wav';
+      else if (ext === 'mp4') rawMime = 'video/mp4';
+      else if (ext === 'webm') rawMime = 'video/webm';
+      else if (ext === 'zip') rawMime = 'application/zip';
+      else rawMime = 'application/octet-stream';
+    }
+
+    if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: filename,
+          types: [{
+            description: `${ext.toUpperCase()} File (*.${ext})`,
+            accept: { [rawMime]: [`.${ext}`] }
+          }]
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return 'saved';
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          // User intentionally closed or cancelled the file picker dialog
+          return 'cancelled';
+        }
+        console.warn('showSaveFilePicker encountered issue, using direct download:', err);
+      }
+    }
+
+    // Direct browser download fallback for Safari or environments where File System Access fails
+    downloadBlob(blob, filename);
+    return 'downloaded';
+  }
+
+  // ---- ExportSession (C4) ---------------------------------------------------
+  // Owns all export modal state: takes[], objectUrls[], listener registration.
+  // Listeners wired once in constructor — not per open() call.
+  // Blob URL lifecycle owned here: created on open(), revoked on close().
+  class ExportSession {
+    constructor({ modalEl, takesList, summaryEl, badgeEl, localFileSaver, saveBlobFn, createZipFn, speechHudEl }) {
+      this._modal = modalEl;
+      this._list = takesList;
+      this._summary = summaryEl;
+      this._badge = badgeEl;
+      this._localFileSaver = localFileSaver;
+      this._saveBlobFn = saveBlobFn;
+      this._createZipFn = createZipFn;
+      this._speechHud = speechHudEl;
+      this._takes = [];
+      this._objectUrls = [];
+
+      // Wire modal close buttons once
+      const closeEls = [
+        document.getElementById('btn-close-export-modal'),
+        document.getElementById('btn-dismiss-export-modal'),
+      ];
+      closeEls.forEach((el) => el && el.addEventListener('click', () => this.close()));
+
+      // Wire Save All to Disk once
+      const btnSaveAll = document.getElementById('btn-save-all-disk');
+      if (btnSaveAll) {
+        btnSaveAll.addEventListener('click', async () => {
+          if (this._takes.length === 0) return;
+          btnSaveAll.disabled = true;
+          btnSaveAll.innerHTML = `<span>Saving all to disk…</span>`;
+          try {
+            let savedCount = 0;
+            for (const take of this._takes) {
+              const ok = await this._localFileSaver.save(take.blob, take.filename);
+              if (ok) savedCount++;
+            }
+            btnSaveAll.innerHTML = `<svg class="w-3.5 h-3.5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg><span class="text-green-400 font-semibold">All ${savedCount} Saved to recordings/</span>`;
+            if (this._speechHud) this._speechHud.textContent = `All ${savedCount} takes saved directly to project recordings/ folder!`;
+          } catch (err) {
+            console.error('Error saving all takes to disk:', err);
+            btnSaveAll.innerHTML = `<span>Save All to recordings/</span>`;
+          } finally {
+            btnSaveAll.disabled = false;
+          }
+        });
+      }
+
+      // Wire ZIP download once
+      const btnZip = document.getElementById('btn-download-all-zip');
+      if (btnZip) {
+        btnZip.addEventListener('click', async () => {
+          if (this._takes.length === 0) return;
+          btnZip.disabled = true;
+          btnZip.innerHTML = `<span>Creating ZIP…</span>`;
+          try {
+            const zipFiles = this._takes.map((t) => ({ name: t.filename, data: t.blob }));
+            const zipBlob = await this._createZipFn(zipFiles);
+            const now = new Date();
+            const pad = (n) => String(n).padStart(2, '0');
+            const zipName = `Teleprompter-Takes-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}.zip`;
+            const res = await this._saveBlobFn(zipBlob, zipName);
+            if (res === 'saved' || res === 'downloaded') {
+              if (this._speechHud) this._speechHud.textContent = `ZIP archive saved (${zipName})!`;
+            }
+          } catch (err) {
+            console.error('Error generating ZIP:', err);
+            if (this._speechHud) this._speechHud.textContent = '⚠ Error generating ZIP: ' + (err && err.message ? err.message : String(err));
+          } finally {
+            btnZip.disabled = false;
+            btnZip.innerHTML = `
+              <svg class="w-4 h-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+              <span>Download All (.ZIP)</span>
+            `;
+          }
+        });
+      }
+
+      // Event delegation on the takes list — one listener wired once for all per-take buttons
+      if (this._list) {
+        this._list.addEventListener('click', async (e) => {
+          const saveDiskBtn = e.target.closest('.btn-save-disk');
+          const saveAsBtn = e.target.closest('.btn-download-single');
+          if (!saveDiskBtn && !saveAsBtn) return;
+
+          const btn = saveDiskBtn || saveAsBtn;
+          const idx = parseInt(btn.getAttribute('data-take-idx'), 10);
+          const take = this._takes[idx];
+          if (!take) return;
+
+          const originalContent = btn.innerHTML;
+          btn.disabled = true;
+
+          if (saveDiskBtn) {
+            btn.innerHTML = `<span>Saving to disk…</span>`;
+            try {
+              const ok = await this._localFileSaver.save(take.blob, take.filename);
+              btn.innerHTML = ok
+                ? `<svg class="w-3.5 h-3.5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg><span class="text-green-400 font-semibold">Saved to recordings/</span>`
+                : `<span class="text-red-400">Save Failed</span>`;
+              if (!ok) setTimeout(() => { btn.innerHTML = originalContent; }, 3000);
+            } catch (err) {
+              console.error('Error saving take to disk:', err);
+              btn.innerHTML = `<span class="text-red-400">Save Failed</span>`;
+              setTimeout(() => { btn.innerHTML = originalContent; }, 3000);
+            }
+          } else {
+            btn.innerHTML = `<span>Saving…</span>`;
+            try {
+              const result = await this._saveBlobFn(take.blob, take.filename);
+              if (result === 'saved' || result === 'downloaded') {
+                btn.innerHTML = `<svg class="w-3.5 h-3.5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg><span class="text-green-400 font-semibold">${result === 'saved' ? 'Saved' : 'Downloaded'}</span>`;
+              } else {
+                btn.innerHTML = originalContent;
+              }
+            } catch (saveErr) {
+              console.error('Save error:', saveErr);
+              btn.innerHTML = originalContent;
+            }
+          }
+          btn.disabled = false;
+        });
+      }
+    }
+
+    // Opens the modal and updates all internal state + DOM. Blob URLs created here.
+    open(takes, mode, format) {
+      if (!this._modal || !this._list) return;
+      this.close(); // revoke previous URLs
+      this._takes = takes;
+      this._objectUrls = takes.map((t) => URL.createObjectURL(t.blob));
+
+      if (this._badge) {
+        this._badge.textContent = `${(mode || 'audio').toUpperCase()} (${(format || 'wav').toUpperCase()})`;
+      }
+      if (this._summary) {
+        this._summary.textContent = `${takes.length} ${takes.length === 1 ? 'file' : 'files'} ready to export`;
+      }
+
+      this._list.innerHTML = takes.map((take, idx) => {
+        const isMaster = take.isMaster;
+        const borderClass = isMaster ? 'export-take-master' : '';
+        const objectUrl = this._objectUrls[idx];
+        return `
+          <div class="export-take-row ${borderClass}">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+              <div class="w-8 h-8 rounded-lg shrink-0 ${isMaster ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-400/30' : 'bg-gray-800 text-gray-300 border border-gray-700'} flex items-center justify-center">
+                ${isMaster
+                  ? '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>'
+                  : '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/></svg>'
+                }
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="font-semibold text-white flex items-center gap-2 truncate">
+                  <span class="truncate">${take.filename}</span>
+                  ${isMaster ? '<span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-700/50 shrink-0">STITCHED MASTER</span>' : ''}
+                </div>
+                <div class="text-[11px] text-gray-400 flex items-center gap-2">
+                  <span>${take.title}</span>
+                  <span>•</span>
+                  <span class="font-mono text-gray-400">${formatDuration(take.duration)}</span>
+                </div>
+                ${(take.sectionMarkers && take.sectionMarkers.length > 0) ? `
+                <div class="mt-1.5 space-y-0.5">
+                  <p class="text-[10px] text-indigo-400 font-semibold uppercase tracking-wider mb-0.5">Section cut points</p>
+                  ${take.sectionMarkers.map((sm) => {
+                    const start = sm.startSec !== null ? formatDuration(sm.startSec) : '–';
+                    const end = sm.endSec !== null ? formatDuration(sm.endSec) : '–';
+                    return `<p class="text-[10px] font-mono text-gray-500">[${sm.title}] ${start} – ${end}</p>`;
+                  }).join('')}
+                </div>` : ''}
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button data-take-idx="${idx}" class="btn-save-disk px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow transition flex items-center gap-1.5 cursor-pointer" title="Save ${take.filename} directly to project recordings/ folder on your Mac">
+                <svg class="w-3.5 h-3.5 text-indigo-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/></svg>
+                <span>Save to Disk</span>
+              </button>
+              <a href="${objectUrl}" download="${take.filename}" class="btn-direct-download px-2.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-xs font-medium rounded-lg border border-gray-700 transition flex items-center gap-1 cursor-pointer" title="Direct browser download for ${take.filename}">
+                <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                <span>Direct</span>
+              </a>
+              <button data-take-idx="${idx}" class="btn-download-single px-2.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-gray-200 text-xs font-medium rounded-lg border border-gray-700 transition flex items-center gap-1 cursor-pointer" title="Save ${take.filename} with macOS folder picker">
+                <span>Save As…</span>
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Show/hide batch buttons based on take count
+      const btnZip = document.getElementById('btn-download-all-zip');
+      const btnSaveAll = document.getElementById('btn-save-all-disk');
+      if (btnZip) btnZip.classList.toggle('hidden', takes.length <= 1);
+      if (btnSaveAll) btnSaveAll.classList.toggle('hidden', takes.length <= 1);
+
+      this._modal.classList.remove('hidden');
+    }
+
+    // Closes modal, revokes all blob URLs.
+    close() {
+      if (this._modal) this._modal.classList.add('hidden');
+      this._objectUrls.forEach((url) => { try { URL.revokeObjectURL(url); } catch (_) {} });
+      this._objectUrls = [];
+    }
+
+    // Read-only accessor for external callers that still reference currentExportTakes.
+    get takes() { return this._takes; }
+  }
+
+  // Instantiate ExportSession — listeners wired exactly once here.
+  const exportSession = new ExportSession({
+    modalEl: modalExport,
+    takesList: exportTakesList,
+    summaryEl: exportSummaryText,
+    badgeEl: exportModeBadge,
+    localFileSaver: LocalFileSaver,
+    saveBlobFn: saveBlobWithDialog,
+    createZipFn: (files) => TeleprompterMedia.createZipBlob(files),
+    speechHudEl: speechHud,
+  });
+
+  // Preserve external call sites unchanged.
+  function openExportModal(takes, mode, format) { exportSession.open(takes, mode, format); }
+  function closeExportModal() { exportSession.close(); }
+
 
   document.getElementById('btn-toggle-panel').addEventListener('click', () => {
     document.getElementById('side-panel').classList.toggle('hidden');
