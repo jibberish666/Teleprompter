@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Architecture Review — static/app.js Monolith Deconstruction</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose" });
+    </script>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+      .seam { stroke-dasharray: 4 4; }
+      .leak { stroke: #dc2626; }
+      .deep-box { background: linear-gradient(135deg, #0f172a, #1e293b); }
+      .card-canvas {
+        background-color: #0b0f19;
+        border: 1px solid #1e293b;
+        border-radius: 8px;
+      }
+      .badge-strong { background: #064e3b; color: #34d399; border: 1px solid #065f46; }
+      .badge-explore { background: #451a03; color: #fbbf24; border: 1px solid #78350f; }
+      .tag-cat { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 antialiased">
+    <main class="max-w-5xl mx-auto px-6 py-12 space-y-12">
+
+      <!-- Header & System Legend -->
+      <header class="border-b border-slate-200 pb-6">
+        <div class="flex items-start justify-between">
+          <div>
+            <h1 class="text-2xl font-bold tracking-tight text-slate-900 font-serif">Architecture Review: static/app.js Monolith Deconstruction</h1>
+            <p class="text-slate-500 text-sm mt-1">Teleprompter &middot; <span class="mono">static/app.js</span> (2,007 lines, down from 2,374) &middot; 30 Sep 2026</p>
+          </div>
+          <div class="text-right text-xs text-slate-400 mono space-y-1 pt-1">
+            <div>Target: static/app.js</div>
+            <div>Companions: static/media.js &middot; static/config.js &middot; static/formatter.js</div>
+          </div>
+        </div>
+
+        <div class="mt-5 flex flex-wrap gap-6 text-xs text-slate-600 bg-white border border-slate-200 rounded-lg p-3">
+          <div class="flex items-center gap-2">
+            <div class="w-5 h-4 border border-slate-400 rounded-sm bg-white"></div>
+            <span>Module</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4 3"/></svg>
+            <span>Seam</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#dc2626" stroke-width="2"/></svg>
+            <span>Leakage</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="w-5 h-4 border-2 border-indigo-500 rounded-sm bg-slate-900"></div>
+            <span>Deep Module</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="w-5 h-4 border border-dashed border-emerald-500 rounded-sm bg-emerald-950/20"></div>
+            <span>Adapter</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Candidates Section -->
+      <section id="candidates" class="space-y-12">
+
+        <!-- Candidate 1: ExportSession & LocalFileSaver (static/export.js) -->
+        <article id="candidate-1" class="border border-slate-200 rounded-xl bg-white p-6 shadow-sm space-y-6">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-4">
+            <div>
+              <h2 class="text-lg font-bold text-slate-900 font-serif">1. Extract ExportSession &amp; Storage Adapters into Deep Module</h2>
+              <div class="mt-2 flex items-center gap-2">
+                <span class="bg-emerald-600 text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">Completed</span>
+                <span class="badge-strong px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Strong</span>
+                <span class="tag-cat px-2 py-0.5 rounded text-[10px] mono">local-substitutable</span>
+                <span class="text-xs text-emerald-600 font-semibold mono">Shed 367 lines from app.js (2,374 &rarr; 2,007)</span>
+              </div>
+            </div>
+            <div class="text-xs text-slate-500 mono bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-md">
+              static/export.js &middot; static/app.js &middot; test_export.js
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <p class="text-xs uppercase font-semibold text-slate-400 tracking-wider mb-2">Before: Inlined Modal &amp; Leaky File System Logic</p>
+              <div class="card-canvas p-4 rounded-lg h-72 flex flex-col justify-between overflow-hidden">
+                <pre class="mermaid">
+                  flowchart TD
+                    APP[app.js Monolith] -->|defines| EXS[ExportSession class]
+                    APP -->|defines| LFS[LocalFileSaver IIFE]
+                    EXS -->|direct mutate| DOM[Export Modal DOM]
+                    EXS -->|direct call| FSA[Chromium File System API]
+                    EXS -->|direct call| DL[a.download DOM Hack]
+                    EXS -.leak.-> SH[speechHud global]
+                    classDef leak stroke:#dc2626,stroke-width:2px;
+                    classDef shallow fill:#1c1305,stroke:#d97706,color:#fcd34d;
+                    class SH leak;
+                    class EXS,LFS shallow;
+                </pre>
+                <div class="text-[11px] text-amber-300 mono bg-amber-950/40 border border-amber-900/50 rounded p-1.5 mt-2">
+                  app.js carries 370 lines of modal wiring and File System dialogs.
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <p class="text-xs uppercase font-semibold text-slate-400 tracking-wider mb-2">After: Deep Export Module with Pluggable Storage Adapter</p>
+              <div class="card-canvas p-4 rounded-lg h-72 flex flex-col justify-between overflow-hidden">
+                <pre class="mermaid">
+                  flowchart TD
+                    APP[app.js Coordinator] -->|open / close| EXM[static/export.js<br/>Deep Export Module]
+                    subgraph EXM[static/export.js]
+                      CORE[ExportSession Core] --> ADAPT{Storage Adapter Seam}
+                    end
+                    ADAPT -->|browser prod| FS_ADAPT[FileSystemDirectoryAdapter]
+                    ADAPT -->|safari fallback| DL_ADAPT[DirectDownloadAdapter]
+                    ADAPT -->|node test| MEM_ADAPT[InMemoryStorageAdapter]
+                    classDef deep fill:#0f172a,stroke:#6366f1,stroke-width:2px,color:#e2e8f0;
+                    classDef adapt fill:#064e3b,stroke:#10b981,stroke-dasharray:3 3,color:#a7f3d0;
+                    class EXM,CORE deep;
+                    class FS_ADAPT,DL_ADAPT,MEM_ADAPT adapt;
+                </pre>
+                <div class="text-[11px] text-emerald-300 mono bg-emerald-950/40 border border-emerald-900/50 rounded p-1.5 mt-2">
+                  Seam verified by two real adapters: browser disk and headless test memory.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-3 pt-2 text-sm">
+            <div>
+              <span class="font-semibold text-slate-900">Problem:</span>
+              <span class="text-slate-600"> 370 lines of DOM modal orchestration, Chromium File System Access calls, and blob URL lifecycles are inlined inside app.js despite already having clear class seams.</span>
+            </div>
+            <div>
+              <span class="font-semibold text-slate-900">Solution:</span>
+              <span class="text-slate-600"> Extract ExportSession and LocalFileSaver into static/export.js behind a small lifecycle interface with swappable storage adapters.</span>
+            </div>
+            <div>
+              <span class="font-semibold text-slate-900 block mb-1">Wins:</span>
+              <ul class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-slate-600 text-xs">
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">locality:</strong> export bugs isolate to one module</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">leverage:</strong> one interface saves takes, masters, ZIPs</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">interface shrinks:</strong> app.js sheds 370 lines</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">test surface:</strong> storage tested without browser dialogs</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- Candidate 2: RehearsalCues & Vocabulary (static/cues.js) -->
+        <article id="candidate-2" class="border border-slate-200 rounded-xl bg-white p-6 shadow-sm space-y-6">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-4">
+            <div>
+              <h2 class="text-lg font-bold text-slate-900 font-serif">2. Deepen RehearsalCues &amp; Vocabulary Subsystem into Standalone Module</h2>
+              <div class="mt-2 flex items-center gap-2">
+                <span class="badge-strong px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Strong</span>
+                <span class="tag-cat px-2 py-0.5 rounded text-[10px] mono">in-process</span>
+                <span class="text-xs text-slate-400 mono">Sheds ~550 lines from app.js</span>
+              </div>
+            </div>
+            <div class="text-xs text-slate-500 mono bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-md">
+              static/cues.js &middot; static/app.js &middot; test_cues.js
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- Mass Diagram: Before (Shallow) -->
+            <div>
+              <p class="text-xs uppercase font-semibold text-slate-400 tracking-wider mb-2">Before: Shallow Spread &amp; Leaky State</p>
+              <div class="card-canvas p-4 rounded-lg h-72 flex flex-col justify-between">
+                <div class="text-xs text-slate-300 font-semibold mb-2">Mass Diagram: Interface vs Implementation</div>
+                <div class="space-y-2 flex-1 flex flex-col justify-center">
+                  <!-- Interface Rectangle -->
+                  <div class="border-2 border-red-500/80 bg-red-950/40 rounded p-2 text-center">
+                    <span class="mono text-[11px] text-red-300 font-bold block">Shallow Interface: ~280 lines</span>
+                    <span class="text-[10px] text-red-400 block mt-0.5">25 DOM event bindings &middot; 8 global arrays &middot; regex cleansers</span>
+                  </div>
+                  <!-- Leaks -->
+                  <div class="flex justify-center items-center py-1">
+                    <svg width="24" height="20"><path d="M12 0 L12 16 M8 12 L12 18 L16 12" stroke="#dc2626" stroke-width="2" fill="none"/></svg>
+                    <span class="text-[10px] text-red-400 mono ml-2">leaks into prompter line rendering</span>
+                  </div>
+                  <!-- Implementation Rectangle -->
+                  <div class="border border-slate-700 bg-slate-900 rounded p-2 text-center">
+                    <span class="mono text-[11px] text-slate-300 font-bold block">Implementation: ~270 lines</span>
+                    <span class="text-[10px] text-slate-400 block mt-0.5">Deduplication &middot; Tag badges &middot; Filter counts</span>
+                  </div>
+                </div>
+                <div class="text-[11px] text-red-300 mono bg-red-950/40 border border-red-900/50 rounded p-1.5">
+                  Interface is nearly as wide as implementation (shallow module).
+                </div>
+              </div>
+            </div>
+
+            <!-- Mass Diagram: After (Deep) -->
+            <div>
+              <p class="text-xs uppercase font-semibold text-slate-400 tracking-wider mb-2">After: Deep RehearsalCues Module</p>
+              <div class="card-canvas p-4 rounded-lg h-72 flex flex-col justify-between">
+                <div class="text-xs text-slate-300 font-semibold mb-2">Mass Diagram: Narrow Interface, Deep Internals</div>
+                <div class="space-y-2 flex-1 flex flex-col justify-center">
+                  <!-- Interface Rectangle (Narrow) -->
+                  <div class="border-2 border-indigo-400 bg-indigo-950/50 rounded p-1.5 text-center">
+                    <span class="mono text-[11px] text-indigo-200 font-bold block">Narrow Interface: 5 methods</span>
+                    <span class="text-[10px] text-indigo-300 block">addWord(w) &middot; recordFumble(f) &middot; getCue(w) &middot; filter(r) &middot; count()</span>
+                  </div>
+                  <!-- Seam -->
+                  <div class="flex justify-center items-center py-0.5">
+                    <svg width="60" height="12"><line x1="0" y1="6" x2="60" y2="6" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="4 3"/></svg>
+                    <span class="text-[10px] text-indigo-300 mono ml-2">clean seam</span>
+                  </div>
+                  <!-- Implementation Rectangle (Tall & Deep) -->
+                  <div class="border-2 border-slate-600 deep-box rounded p-3 text-center">
+                    <span class="mono text-[11px] text-emerald-400 font-bold block">Deep Module: ~480 lines absorbed</span>
+                    <span class="text-[10px] text-slate-300 block mt-1 leading-snug">
+                      Punctuation normalization &middot; Phonetic styling &middot; Stumble categorization &middot; Rehearsal metrics &middot; ConfigStore persistence
+                    </span>
+                  </div>
+                </div>
+                <div class="text-[11px] text-emerald-300 mono bg-emerald-950/40 border border-emerald-900/50 rounded p-1.5">
+                  Deletion test: deleting RehearsalCues concentrates complexity cleanly.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-3 pt-2 text-sm">
+            <div>
+              <span class="font-semibold text-slate-900">Problem:</span>
+              <span class="text-slate-600"> 550 lines of pronunciation vocab, rehearsal fumbles, batch text parsing, tag filtering, and color styling sprawl across app.js with zero automated tests.</span>
+            </div>
+            <div>
+              <span class="font-semibold text-slate-900">Solution:</span>
+              <span class="text-slate-600"> Encapsulate vocabulary sets, phonetic cues, stumble classifications, and filter projections behind a unified RehearsalCues store.</span>
+            </div>
+            <div>
+              <span class="font-semibold text-slate-900 block mb-1">Wins:</span>
+              <ul class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-slate-600 text-xs">
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">locality:</strong> pronunciation and fumbles concentrate in cues</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">interface shrinks:</strong> 30 DOM bindings become 5 methods</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">leverage:</strong> live prompter and modal share state</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">test surface:</strong> 100% testable without browser DOM</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- Candidate 3: PrompterViewport Display Engine (static/viewport.js) -->
+        <article id="candidate-3" class="border border-slate-200 rounded-xl bg-white p-6 shadow-sm space-y-6">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-4">
+            <div>
+              <h2 class="text-lg font-bold text-slate-900 font-serif">3. Deepen PrompterViewport Display &amp; Scrolling Engine</h2>
+              <div class="mt-2 flex items-center gap-2">
+                <span class="badge-explore px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Worth exploring</span>
+                <span class="tag-cat px-2 py-0.5 rounded text-[10px] mono">in-process</span>
+                <span class="text-xs text-slate-400 mono">Sheds ~260 lines from app.js</span>
+              </div>
+            </div>
+            <div class="text-xs text-slate-500 mono bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-md">
+              static/viewport.js &middot; static/app.js &middot; test_viewport.js
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <p class="text-xs uppercase font-semibold text-slate-400 tracking-wider mb-2">Before: Scattered Transform Math &amp; Line State</p>
+              <div class="card-canvas p-4 rounded-lg h-72 flex flex-col justify-between overflow-hidden">
+                <pre class="mermaid">
+                  flowchart TD
+                    APP[app.js Monolith]
+                    APP -->|calculates line height| LH[getLineHeightForFontSize]
+                    APP -->|sets CSS transform| SC[scrollingContent translateY]
+                    APP -->|toggles classes| LW[line-active / upcoming / past]
+                    APP -->|toggles span| WA[word-active]
+                    APP -->|resizes box| VB[updateViewportLines]
+                    classDef shallow fill:#1c1305,stroke:#d97706,color:#fcd34d;
+                    class LH,SC,LW,WA,VB shallow;
+                </pre>
+                <div class="text-[11px] text-amber-300 mono bg-amber-950/40 border border-amber-900/50 rounded p-1.5 mt-2">
+                  5 callers manually compute translateY offsets and mutate CSS classes.
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <p class="text-xs uppercase font-semibold text-slate-400 tracking-wider mb-2">After: Unified PrompterViewport Seam</p>
+              <div class="card-canvas p-4 rounded-lg h-72 flex flex-col justify-between overflow-hidden">
+                <pre class="mermaid">
+                  flowchart TD
+                    APP[app.js Coordinator] -->|renderTokens / scrollToWord| PVP[static/viewport.js<br/>PrompterViewport]
+                    subgraph PVP[static/viewport.js]
+                      GEOM[Geometry & Line Height]
+                      DOM_GEN[Line/Word DOM Builder]
+                      SCROLL[Smooth translateY Engine]
+                      CURSOR[Active Cursor Positioner]
+                    end
+                    PVP -->|drives| CONTAINER[(DOM prompter-box)]
+                    classDef deep fill:#0f172a,stroke:#6366f1,stroke-width:2px,color:#e2e8f0;
+                    class PVP,GEOM,DOM_GEN,SCROLL,CURSOR deep;
+                </pre>
+                <div class="text-[11px] text-emerald-300 mono bg-emerald-950/40 border border-emerald-900/50 rounded p-1.5 mt-2">
+                  One seam absorbs typography metrics, scroll transforms, and token rendering.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-3 pt-2 text-sm">
+            <div>
+              <span class="font-semibold text-slate-900">Problem:</span>
+              <span class="text-slate-600"> Script HTML generation, line-height geometry, CSS transform math, and active/upcoming/past DOM updates leak into session state variables.</span>
+            </div>
+            <div>
+              <span class="font-semibold text-slate-900">Solution:</span>
+              <span class="text-slate-600"> Extract a PrompterViewport module that owns script token rendering, line height calculations, transform positioning, and word/line highlight state.</span>
+            </div>
+            <div>
+              <span class="font-semibold text-slate-900 block mb-1">Wins:</span>
+              <ul class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-slate-600 text-xs">
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">locality:</strong> scroll math concentrates in viewport</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">leverage:</strong> seek, hotkeys, sync share viewport</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">interface shrinks:</strong> DOM rendering hidden behind tokens</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">test surface:</strong> line clamp math testable headless</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- Candidate 4: SectionTimeline Standalone Module (static/timeline.js) -->
+        <article id="candidate-4" class="border border-slate-200 rounded-xl bg-white p-6 shadow-sm space-y-6">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-4">
+            <div>
+              <h2 class="text-lg font-bold text-slate-900 font-serif">4. Extract SectionTimeline &amp; Retake Navigation into Dedicated Module</h2>
+              <div class="mt-2 flex items-center gap-2">
+                <span class="badge-explore px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Worth exploring</span>
+                <span class="tag-cat px-2 py-0.5 rounded text-[10px] mono">in-process</span>
+                <span class="text-xs text-slate-400 mono">Sheds ~120 lines from app.js</span>
+              </div>
+            </div>
+            <div class="text-xs text-slate-500 mono bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-md">
+              static/timeline.js &middot; static/app.js &middot; test_timeline.js
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <p class="text-xs uppercase font-semibold text-slate-400 tracking-wider mb-2">Before: Inlined Class &amp; Global State Coupling</p>
+              <div class="card-canvas p-4 rounded-lg h-72 flex flex-col justify-between overflow-hidden">
+                <pre class="mermaid">
+                  flowchart TD
+                    APP[app.js Monolith] -->|defines| STL[SectionTimeline class]
+                    STL -->|mutates| PS[parsedSections array]
+                    APP -->|reads/writes| AS[currentActiveSectionId]
+                    APP -->|direct UI touch| RB[btnRetakeText innerText]
+                    STL -.leak.-> ST[sessionStartTime global]
+                    classDef leak stroke:#dc2626,stroke-width:2px;
+                    class ST leak;
+                </pre>
+                <div class="text-[11px] text-amber-300 mono bg-amber-950/40 border border-amber-900/50 rounded p-1.5 mt-2">
+                  SectionTimeline class is already crisp, but trapped inside app.js.
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <p class="text-xs uppercase font-semibold text-slate-400 tracking-wider mb-2">After: Standalone Timeline State Machine</p>
+              <div class="card-canvas p-4 rounded-lg h-72 flex flex-col justify-between overflow-hidden">
+                <pre class="mermaid">
+                  flowchart TD
+                    APP[app.js] -->|wordSeen / retake / close| TLM[static/timeline.js<br/>SectionTimeline Module]
+                    TLM -->|yields markers| EXP[static/media.js Slicer]
+                    TLM -->|yields seekIndex| SYNC[server.py WebSocket Seek]
+                    TLM -->|notifies title| HUD[Retake Button UI]
+                    classDef deep fill:#0f172a,stroke:#6366f1,stroke-width:2px,color:#e2e8f0;
+                    class TLM deep;
+                </pre>
+                <div class="text-[11px] text-emerald-300 mono bg-emerald-950/40 border border-emerald-900/50 rounded p-1.5 mt-2">
+                  100% testable state machine verifying section boundaries and retake seeks.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-3 pt-2 text-sm">
+            <div>
+              <span class="font-semibold text-slate-900">Problem:</span>
+              <span class="text-slate-600"> Section marker timestamps and retake seeking logic are embedded inside app.js event listeners and global variables.</span>
+            </div>
+            <div>
+              <span class="font-semibold text-slate-900">Solution:</span>
+              <span class="text-slate-600"> Move SectionTimeline to static/timeline.js as an isolated state machine for cut points, elapsed timings, and retake indexes.</span>
+            </div>
+            <div>
+              <span class="font-semibold text-slate-900 block mb-1">Wins:</span>
+              <ul class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-slate-600 text-xs">
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">locality:</strong> timestamp state machine in one module</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">interface shrinks:</strong> 4 crisp methods encapsulate cuts</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">leverage:</strong> export slicer and prompter share markers</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><strong class="text-slate-800">test surface:</strong> 100% testable with synthetic timestamps</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+      </section>
+
+      <!-- Top Recommendation Section -->
+      <section id="top-recommendation" class="border-2 border-indigo-500 rounded-xl bg-slate-950 text-white p-8 shadow-lg space-y-4">
+        <div class="flex items-center justify-between">
+          <span class="text-xs uppercase tracking-wider text-indigo-400 font-bold mono">Top Recommendation</span>
+          <span class="text-xs text-slate-400 mono">Phase 1 Monolith Deconstruction</span>
+        </div>
+        <h3 class="text-xl font-bold font-serif text-white">Extract ExportSession &amp; LocalFileSaver into static/export.js</h3>
+        <p class="text-slate-300 text-sm leading-relaxed">
+          The export subsystem (Candidate 1) is already structured internally as cohesive classes with zero dependencies on the live speech tracking loop; moving it into <span class="mono text-indigo-300">static/export.js</span> immediately removes <strong>370 lines of friction</strong> from <span class="mono text-slate-200">app.js</span> with zero regression risk to audio-word tracking.
+        </p>
+        <div class="pt-2">
+          <a href="#candidate-1" class="inline-flex items-center gap-2 text-xs font-semibold text-indigo-400 hover:text-indigo-300 transition">
+            <span>Jump to Candidate 1 Details</span>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+          </a>
+        </div>
+      </section>
+
+    </main>
+  </body>
+</html>
