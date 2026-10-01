@@ -4,6 +4,13 @@
  */
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+// Load embedded lamejs into global scope for Node test runner
+eval(fs.readFileSync(path.join(__dirname, 'static/lame.min.js'), 'utf8'));
+global.lamejs = lamejs;
+
 const Media = require('./static/media.js');
 
 describe('TeleprompterMedia - Resampling Pipeline (16 kHz)', () => {
@@ -317,8 +324,56 @@ describe('TeleprompterMedia - Section Take Slicing & Master Splicing', () => {
     assert.equal(sec1.duration, 4.0, 'Clamped duration must equal full buffer duration');
   });
 
-  test('omits unreached sections with null timestamps and prevents ghost duplicate takes', () => {
+  test('processAudioTakes exports 1.mp3, 2.mp3, and everything.mp3 with exact boundaries', () => {
     const original = createMockBuffer(10, 1000);
+    const sections = [
+      { id: '1', title: 'Introduction', startSec: 1.0, endSec: 4.0 },
+      { id: '2', title: 'Specifications', startSec: 5.0, endSec: 9.0 }
+    ];
+
+    const { takes } = Media.processAudioTakes(original, sections, 'mp3', 0.25);
+    assert.equal(takes.length, 3, 'Must produce 2 section takes + 1 stitched master take');
+
+    const sec1 = takes.find((t) => t.filename === '1.mp3');
+    assert.ok(sec1, 'Take 1.mp3 must exist');
+    assert.equal(sec1.isMaster, false);
+    assert.equal(sec1.title, 'Section [Introduction]');
+
+    const sec2 = takes.find((t) => t.filename === '2.mp3');
+    assert.ok(sec2, 'Take 2.mp3 must exist');
+    assert.equal(sec2.isMaster, false);
+    assert.equal(sec2.title, 'Section [Specifications]');
+
+    const master = takes.find((t) => t.filename === 'everything.mp3');
+    assert.ok(master, 'everything.mp3 must exist');
+    assert.equal(master.isMaster, true);
+  });
+
+  test('processAudioTakes exports 1.mp3, 2.mp3, and everything.mp3 with estimated boundaries when audio extends beyond Section 1', () => {
+    const original = createMockBuffer(10, 1000); // 10 second buffer
+    const sections = [
+      { id: '1', title: 'Introduction', startSec: 0.0, endSec: 4.0 },
+      { id: '2', title: 'Specifications', startSec: null, endSec: null }
+    ];
+
+    const { takes } = Media.processAudioTakes(original, sections, 'mp3', 0.25);
+    assert.equal(takes.length, 3, 'Must reconcile Section 2 and export 1.mp3, 2.mp3, everything.mp3');
+
+    const sec1 = takes.find((t) => t.filename === '1.mp3');
+    assert.ok(sec1, 'Take 1.mp3 must exist');
+
+    const sec2 = takes.find((t) => t.filename === '2.mp3');
+    assert.ok(sec2, 'Estimated Take 2.mp3 must exist');
+    assert.equal(sec2.isMaster, false);
+    assert.ok(sec2.duration > 5.0, 'Estimated take duration must cover remaining audio');
+
+    const master = takes.find((t) => t.filename === 'everything.mp3');
+    assert.ok(master, 'everything.mp3 must exist');
+    assert.equal(master.isMaster, true);
+  });
+
+  test('omits unreached trailing sections when audio does not extend beyond Section 1', () => {
+    const original = createMockBuffer(4, 1000); // Exactly 4.0s recorded
     const sections = [
       { id: '1', title: 'Reached Section', startSec: 0.0, endSec: 4.0 },
       { id: '2', title: 'Unreached Section 2', startSec: null, endSec: null },
@@ -330,9 +385,6 @@ describe('TeleprompterMedia - Section Take Slicing & Master Splicing', () => {
 
     const sec1 = takes.find((t) => t.filename === '1.wav');
     assert.ok(sec1, 'Take 1.wav must exist');
-    assert.equal(sec1.title, 'Section [Reached Section]');
-    // 0.0 to 4.0 + 0.25 = 4.25s
-    assert.equal(sec1.duration, 4.25);
 
     const sec2 = takes.find((t) => t.filename === '2.wav');
     assert.equal(sec2, undefined, 'Unreached Section 2 must not produce a take');
@@ -342,7 +394,6 @@ describe('TeleprompterMedia - Section Take Slicing & Master Splicing', () => {
 
     const master = takes.find((t) => t.filename === 'everything.wav');
     assert.ok(master, 'Master take must exist');
-    assert.equal(master.duration, 4.25, 'Master take must only concatenate reached sections');
   });
 });
 

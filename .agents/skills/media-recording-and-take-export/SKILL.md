@@ -25,24 +25,27 @@ This skill provides the comprehensive guide, runbook, architecture reference, an
              │
              │ (Live session speech tracking in parallel)
              │ ───► [SectionTimeline] (static/timeline.js)
-             │      Stamps startSec / endSec on active sections
+             │      - Stamps startSec / endSec on active transitions
+             │      - Cadence Lookback: ~140 WPM (~400ms/word) for missed boundary words
              │
    [User Clicks Stop]
              │
              ▼
-   [Stop Flush Window] (500ms in static/app.js)
+   [Stop Flush Window] (1200ms in static/app.js)
    - Halts mic streaming: stopBrowserAudioStream()
-   - Keeps sync receiver open for pending Whisper ASR tokens
+   - Keeps sync receiver open for pending Whisper ASR tokens (600ms CPU tick + 500ms margin)
    - Calls sectionTimeline.close(totalSessionSec)
+   - Calls sectionTimeline.resolveBoundaries(totalSessionSec)
              │
              ▼
    [Recording Finalizer] (finalizeRecording() in static/media.js)
    - Decodes recorded WebM Blob -> AudioBuffer via AudioContext
-   - Safeguard: 2000ms race timeout against Chromium decode hangs
+   - Safeguard: 15s race timeout against Chromium decode hangs
              │
              ▼
    [Take Slicing Engine] (processAudioTakes() in static/media.js)
-   - Skips unreached sections (startSec === null)
+   - Runs reconcileSectionBoundaries() pass:
+     If buffer extends beyond Section 1, unstarted sections get proportional slices
    - Slices valid sections: [startSec - pad, endSec + pad]
    - Encodes discrete takes: audioBufferToMp3() (192kbps) or audioBufferToWav()
    - Concatenates clean sections -> everything.mp3 / everything.wav
@@ -61,10 +64,10 @@ This skill provides the comprehensive guide, runbook, architecture reference, an
 
 | File | Primary Responsibility | Critical Invariants |
 | :--- | :--- | :--- |
-| [`static/media.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/media.js) | Owns `MediaSession`, `MediaRecorder`, Web Audio decoding, LAME MP3 encoding, and `processAudioTakes` | Must downsample/resample cleanly. Must guard against Chromium `decodeAudioData` hangs. Must never slice unreached sections (`startSec == null`). |
-| [`static/timeline.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/timeline.js) | `SectionTimeline` deep module tracking wall-clock section boundaries and retake seek targets | When active section transitions, closes previous section at `nowSec` and opens next at `nowSec - 0.1s`. `retake()` resets target section timestamps. |
+| [`static/media.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/media.js) | Owns `MediaSession`, `MediaRecorder`, Web Audio decoding, LAME MP3 encoding, and `processAudioTakes` | Must downsample/resample cleanly. Must guard against Chromium `decodeAudioData` hangs. Runs `reconcileSectionBoundaries()` so unstarted sections with recorded audio produce takes. |
+| [`static/timeline.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/timeline.js) | `SectionTimeline` deep module tracking wall-clock section boundaries and retake seek targets | When active section transitions, closes previous section. Missing boundary words use cadence lookback (~400ms/word). `resolveBoundaries()` resolves unstarted sections against unaccounted audio. |
 | [`static/export.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/export.js) | `TeleprompterExport` module managing storage adapters (Directory Picker, Direct Download, In-Memory) | Falls back gracefully from File System Access API to direct download. Formats durations cleanly. |
-| [`static/app.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/app.js) | UI coordinator binding start/stop, retake button, HUD status badges, and export modal | Must provide a 500ms flush window before stopping MediaRecorder. Must prevent duplicate stop calls with `isStopping` guard. |
+| [`static/app.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/app.js) | UI coordinator binding start/stop, retake button, HUD status badges, and export modal | Must provide a 1200ms flush window before stopping MediaRecorder. Must prevent duplicate stop calls with `isStopping` guard. |
 
 ---
 
@@ -72,9 +75,9 @@ This skill provides the comprehensive guide, runbook, architecture reference, an
 
 When modifying section slicing or timeline recording:
 
-1. **Unreached Section Guard**:
-   - Never slice a section where `sec.startSec === null || sec.startSec === undefined || isNaN(Number(sec.startSec))`.
-   - Missing start timestamps mean the user never reached or spoke that section. Slicing from `0` to `totalDuration` creates catastrophic duplicate audio files.
+1. **Fallback Boundary Recovery & Unstarted Section Guard**:
+   - `reconcileSectionBoundaries()` evaluates sections before slicing: if recorded audio extends beyond Section 1, unstarted trailing sections receive their proportional slice of the unaccounted audio rather than being skipped.
+   - If the recorded buffer duration does *not* extend beyond Section 1 (e.g. user stopped immediately), unreached sections remain un-sliced to prevent empty ghost takes.
 2. **Silence Padding Rule**:
    - Default padding is `pad = 0.25` seconds (250ms).
    - `sStart = Math.max(0, startSec - pad)`
@@ -83,13 +86,16 @@ When modifying section slicing or timeline recording:
 3. **Master Concatenation Locality**:
    - `everything.[format]` must be concatenated **strictly** from `cleanSectionBuffers` (only reached sections).
    - If no sections were reached, `finalizeRecording` must supply the original un-sliced recording as the master take so recordings are never lost.
-4. **Flush Before Close**:
-   - Speech recognition (faster-whisper) has ~300–500ms pipeline latency.
-   - Clicking **Stop** must halt microphone input immediately, wait 400–600ms to allow in-flight WebSocket sync messages to register transitions, and only *then* call `sectionTimeline.close()` and stop `mediaRecorder`.
-5. **Safety Timer Cancellation on onstop**:
+4. **Flush Before Close (1200ms Window)**:
+   - Faster-whisper on CPU has a 600ms tick loop and a 500ms commit margin.
+   - Clicking **Stop** must halt microphone input immediately, wait 1200ms to allow in-flight Whisper frames to emit final section transitions, and only *then* seal `sectionTimeline.close()`, run `sectionTimeline.resolveBoundaries()`, and finalize `mediaRecorder`.
+5. **Cadence-Aware Boundary Lookback**:
+   - When a word inside Section 2 (or any section) is first recognized, if it is not the very first word of that section (`globalIdx > startIndex`), the true start time looks back based on average speaking pace (~140 WPM, ~400ms per word).
+   - The estimated start time is cleanly anchored after the preceding section's end, and if the preceding section was active, it closes cleanly at that boundary.
+6. **Safety Timer Cancellation on onstop**:
    - In `mediaSession.stopRecording()`, `safetyTimer` must be cancelled via `clearTimeout(safetyTimer)` immediately when `this.mediaRecorder.onstop` begins executing.
    - Never allow `safetyTimer` to run during `finalizeRecording()`. Software MP3 encoding (via LAME JS) takes 1.5–5 seconds for multi-take sessions. If `safetyTimer` is not cleared, it will prematurely resolve with an emergency fallback, dropping all section takes and leaving only a single "Master Session Audio" file.
-6. **Eliminate Redundant Full-Buffer Encoding**:
+7. **Eliminate Redundant Full-Buffer Encoding**:
    - When sections are present, use the stitched master take from `processAudioTakes()` as `finalBlob` rather than redundantly encoding the entire un-sliced audio buffer to MP3 before slicing.
 
 ---
@@ -103,6 +109,7 @@ Always run the full test suite when making changes to media, timeline, or export
 node test_media.js
 node test_export.js
 node test_timeline.js
+node test_simulation.js
 ```
 
 ### Running the Complete Node Test Suite
@@ -116,11 +123,14 @@ node --test test_*.js
 
 ### Symptom 1: Export modal only shows "Master Session Audio" with zero section takes
 - **Check**: Did `safetyTimer` in `mediaSession.stopRecording()` expire during MP3 encoding? Ensure `clearTimeout(safetyTimer)` is called at the very top of `mediaRecorder.onstop`.
-- **Check**: Did `decodeAudioData` time out? Verify the decode timeout in `finalizeRecording` is at least 15s, not 2s.
-- **Check**: Are sections with `startSec: null` being processed? Verify that `processAudioTakes` in `static/media.js` skips unreached sections without dropping reached ones.
+- **Check**: Did `decodeAudioData` time out? Verify the decode timeout in `finalizeRecording` is at least 15s.
+- **Check**: Did `reconcileSectionBoundaries()` run? If Whisper missed Section 2 words, `reconcileSectionBoundaries` guarantees Section 2 is assigned its slice rather than falling back to Master Session Audio.
 
-### Symptom 2: Browser hangs on "Processing MP3/WAV audio…"
-- **Check**: Chromium/Brave `decodeAudioData` bug. Short WebM blobs without duration headers can hang indefinitely. Ensure the 2000ms `Promise.race` timeout in `finalizeRecording` is intact.
+### Symptom 2: Beginning of Section 2 audio is cut off in 2.mp3
+- **Check**: Cadence lookback in `static/timeline.js`. If the speaker started Section 2 but Whisper missed words 0–2, verify `_estimateStartSec` applied the ~400ms/word lookback.
 
-### Symptom 3: File System Directory picker throws security error
+### Symptom 3: Browser hangs on "Processing MP3/WAV audio…"
+- **Check**: Chromium/Brave `decodeAudioData` bug. Short WebM blobs without duration headers can hang indefinitely. Ensure the race timeout in `finalizeRecording` is intact.
+
+### Symptom 4: File System Directory picker throws security error
 - **Check**: Browser security context. `showDirectoryPicker()` requires a secure context (`localhost` or HTTPS) and must be invoked directly from a user activation (click event). `TeleprompterExport` must fall back to direct downloads if rejected.

@@ -205,7 +205,7 @@ class Transcriber:
         self.audio.reset()
         self._running.set()
 
-    def begin(self, words=None, is_rehearsal=False, observer=None):
+    def begin(self, words=None, is_rehearsal=False, observer=None, section_boundaries=None):
         """Begin session: start live transcription (and attach legacy aligner if words supplied)."""
         if words is not None:
             eff_observer = observer if observer is not None else self.observer
@@ -214,6 +214,7 @@ class Transcriber:
                 window=self.align_window,
                 tolerance=self.align_tolerance,
                 observer=eff_observer,
+                section_boundaries=section_boundaries,
             )
             self.is_rehearsal = bool(is_rehearsal)
         self.start()

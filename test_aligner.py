@@ -126,6 +126,27 @@ class TestAligner(unittest.TestCase):
         self.assertEqual(matched, [21, 22])
         self.assertEqual(self.aligner.cursor, 23)
 
+    def test_forward_jump_recovery_across_section_boundaries(self):
+        # Section 2 starts at index 21 (containing 'for' at 21, 'passenger' at 22, 'car' at 23)
+        self.aligner.set_section_boundaries([21])
+        self.aligner.seek(14)  # Cursor is at index 14 in section 1
+
+        # Short word ('car', 3 chars) across boundary must be rejected
+        matched_short = self.aligner.align(["car"])
+        self.assertEqual(matched_short, [])
+        self.assertEqual(self.aligner.cursor, 14)
+
+        # Single distinctive word ('passenger') across boundary without confirmation is rejected
+        # to prevent accidental premature section jumping on repeated/common words
+        matched_single = self.aligner.align(["passenger"])
+        self.assertEqual(matched_single, [])
+        self.assertEqual(self.aligner.cursor, 14)
+
+        # Multi-word sequence across boundary confirms intentional progression
+        matched_sequence = self.aligner.align(["passenger", "car"])
+        self.assertEqual(matched_sequence, [22, 23])
+        self.assertEqual(self.aligner.cursor, 24)
+
     def test_compound_words_split_asr(self):
         # Script has "high-speed" (normalized to "highspeed" at index 16)
         self.aligner.seek(16)

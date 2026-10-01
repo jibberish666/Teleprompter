@@ -358,6 +358,26 @@ class TestPrompterSession(unittest.TestCase):
         except OSError:
             pass
 
+    def test_dispatch_restart_server(self):
+        restarted = []
+        self.session.on_restart = lambda: restarted.append(True)
+        self.session.dispatch(json.dumps({"type": "restart_server"}))
+
+        stopping_events = [e for e in self.events if e.get("type") == "server_stopping"]
+        self.assertEqual(len(stopping_events), 1)
+        self.assertEqual(stopping_events[0]["action"], "restart")
+        self.assertEqual(len(restarted), 1)
+
+    def test_dispatch_shutdown_server(self):
+        shutdowns = []
+        self.session.on_shutdown = lambda: shutdowns.append(True)
+        self.session.dispatch(json.dumps({"type": "shutdown_server"}))
+
+        stopping_events = [e for e in self.events if e.get("type") == "server_stopping"]
+        self.assertEqual(len(stopping_events), 1)
+        self.assertEqual(stopping_events[0]["action"], "shutdown")
+        self.assertEqual(len(shutdowns), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

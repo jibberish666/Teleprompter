@@ -396,6 +396,58 @@
   }
 
   /**
+   * Reconciles section boundaries for take slicing.
+   * If multiple sections are defined and the recorded buffer duration extends beyond Section 1,
+   * unstarted sections that follow an ended section are assigned their proportional slice rather than skipped.
+   *
+   * @param {Array<object>} sections - Section descriptor objects
+   * @param {number} totalDuration - Total audio buffer duration in seconds
+   * @returns {Array<object>} Reconciled sections
+   */
+  function reconcileSectionBoundaries(sections = [], totalDuration = 0) {
+    if (!Array.isArray(sections) || sections.length <= 1 || totalDuration <= 0) {
+      return sections;
+    }
+
+    const reconciled = sections.map((s) => Object.assign({}, s));
+    const sec1 = reconciled[0];
+    const sec1End = (sec1.endSec !== null && sec1.endSec !== undefined && !isNaN(Number(sec1.endSec)))
+      ? Number(sec1.endSec)
+      : (sec1.startSec !== null && sec1.startSec !== undefined && !isNaN(Number(sec1.startSec)) ? Number(sec1.startSec) : null);
+
+    // If recorded buffer duration extends beyond Section 1
+    if (sec1End !== null && totalDuration > sec1End) {
+      for (let i = 1; i < reconciled.length; i++) {
+        const sec = reconciled[i];
+        const prev = reconciled[i - 1];
+        const prevEnd = (prev.endSec !== null && prev.endSec !== undefined && !isNaN(Number(prev.endSec)))
+          ? Number(prev.endSec)
+          : null;
+
+        const isUnstarted = sec.startSec === null || sec.startSec === undefined || isNaN(Number(sec.startSec));
+        if (isUnstarted && prevEnd !== null && totalDuration > prevEnd) {
+          // Count unstarted sections from i to end
+          let unstartedCount = 0;
+          for (let k = i; k < reconciled.length; k++) {
+            const s = reconciled[k];
+            if (s.startSec === null || s.startSec === undefined || isNaN(Number(s.startSec))) {
+              unstartedCount++;
+            }
+          }
+          const remainingTime = Math.max(0, totalDuration - prevEnd);
+          const sliceDuration = unstartedCount > 0 ? (remainingTime / unstartedCount) : remainingTime;
+          sec.startSec = prevEnd;
+          if (sec.endSec === null || sec.endSec === undefined || isNaN(Number(sec.endSec))) {
+            sec.endSec = Math.min(totalDuration, prevEnd + sliceDuration);
+          }
+        }
+      }
+    }
+
+    return reconciled;
+  }
+
+  /**
    * Slices an AudioBuffer into discrete section takes and a stitched master take.
    *
    * @param {AudioBuffer|object} audioBuffer - Decoded audio buffer
@@ -412,8 +464,9 @@
     const cleanSectionBuffers = [];
     const takes = [];
     const totalDuration = audioBuffer.duration || (audioBuffer.length / audioBuffer.sampleRate) || 0;
+    const effectiveSections = reconcileSectionBoundaries(sections, totalDuration);
 
-    for (const sec of sections) {
+    for (const sec of effectiveSections) {
       // Guard against unreached or unstarted sections:
       // If startSec is null, undefined, or NaN, this section was never reached or spoken.
       if (sec.startSec === null || sec.startSec === undefined || isNaN(Number(sec.startSec))) {
@@ -1148,6 +1201,7 @@
     sliceAudioBuffer,
     concatAudioBuffers,
     processAudioTakes,
+    reconcileSectionBoundaries,
     computeCrc32,
     createZipBlob,
     getAudioRecorderOptions,

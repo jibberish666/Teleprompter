@@ -11,6 +11,8 @@ import asyncio
 import json
 import os
 import socket
+import sys
+import time
 
 from websockets.asyncio.server import serve
 from websockets.datastructures import Headers
@@ -202,10 +204,22 @@ async def static_handler(_connection, request):
 async def main(args):
     loop = asyncio.get_running_loop()
     hub = SyncHub(loop)
+    stop_event = asyncio.Event()
+    restart_flag = {"restart": False}
+
+    def request_restart():
+        restart_flag["restart"] = True
+        loop.call_later(0.15, stop_event.set)
+
+    def request_shutdown():
+        restart_flag["restart"] = False
+        loop.call_later(0.15, stop_event.set)
 
     prompter = session.PrompterSession(
         event_sink=hub.schedule,
         on_config_save=save_persisted_config,
+        on_restart=request_restart,
+        on_shutdown=request_shutdown,
         config_path=CONFIG_FILE,
         mic=args.mic,
         browser_audio=args.browser_audio,
@@ -256,9 +270,11 @@ async def main(args):
         print(f"  Profile: {prompter.profile} (model={prompter.model_name}, tick={prompter.tick}s, compute_type={args.compute_type})", flush=True)
         print("  First run downloads the model if needed. Press Ctrl+C to stop.", flush=True)
         try:
-            await asyncio.Future()
+            await stop_event.wait()
         finally:
             prompter.shutdown()
+
+    return restart_flag["restart"]
 
 
 if __name__ == "__main__":
@@ -269,6 +285,12 @@ if __name__ == "__main__":
     else:
         audio_capture.AudioSource.report_devices()
     try:
-        asyncio.run(main(args))
+        should_restart = asyncio.run(main(args))
+        if should_restart:
+            print("Restarting server process...", flush=True)
+            time.sleep(0.3)
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        else:
+            print("Server shut down cleanly.", flush=True)
     except KeyboardInterrupt:
         print("\nShutting down.")

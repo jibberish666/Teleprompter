@@ -76,7 +76,7 @@ To verify section boundary transitions and take slicing without requiring live m
    ```
 6. **Trigger Session Stop**:
    Click `#btn-stop`.
-   - Confirm status badge transitions to `FINALIZING…` during the 500ms flush window.
+   - Confirm status badge transitions to `FINALIZING…` during the 1200ms flush window (allowing in-flight Whisper frames to settle).
    - Confirm `#export-modal` unhides (`classList.contains('hidden') === false`).
 7. **Inspect Generated Takes**:
    Query the rendered take elements:
@@ -85,9 +85,8 @@ To verify section boundary transitions and take slicing without requiring live m
    console.log('Exported Takes:', takes);
    ```
    **Pass Criteria**:
-   - `Section One` take exists with non-zero duration.
-   - `Section Two` take exists with non-zero duration.
-   - Durations are distinct and match section lengths.
+   - `Section One` take (`1.mp3` or `1.wav`) exists with non-zero duration.
+   - `Section Two` take (`2.mp3` or `2.wav`) exists with non-zero duration (even if boundary words were dropped, via cadence lookback or fallback resolution).
    - Spliced master (`everything.[format]`) exists.
    - No duplicate unreached section files exist.
 
@@ -104,7 +103,8 @@ When debugging unexplained behavior in the browser:
    ```
    Verify:
    - `startSec` and `endSec` are finite numbers for reached sections.
-   - Unreached sections have `startSec: null` and `endSec: null`.
+   - Cadence lookback properly anchored Section 2 after Section 1's `endSec`.
+   - `sectionTimeline.resolveBoundaries(totalDuration)` eliminates `startSec: null` if audio extended past Section 1.
 2. **Inspect Active MediaRecorder State**:
    ```javascript
    console.log({

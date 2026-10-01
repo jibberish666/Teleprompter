@@ -71,6 +71,30 @@ describe('TeleprompterTimeline - Section Boundary & Retake State Machine', () =>
     assert.equal(changedSection.title, 'Main Story');
   });
 
+  test('rejects premature section transitions during early dwell window (< minDwellSec)', () => {
+    // Start in Sec 1 at t=1.0s (sec-1 has 50 words: startIndex=0, sec-2 startIndex=50)
+    sampleSections[0].endIndex = 49;
+    elapsedSec = 1.0;
+    timeline.wordSeen({ sectionId: 'sec-1', original: 'Welcome', globalIdx: 0 }, true);
+    assert.equal(sampleSections[0].startSec, 0.9);
+    assert.equal(timeline.activeId, 'sec-1');
+
+    // Premature wordSeen from sec-2 at t=1.8s (only 0.8s elapsed dwell, minDwellSec is 2.0s)
+    elapsedSec = 1.8;
+    timeline.wordSeen({ sectionId: 'sec-2', original: 'Spurious', globalIdx: 50 }, true);
+
+    // Section 1 should NOT be closed, and activeId should remain sec-1
+    assert.equal(timeline.activeId, 'sec-1');
+    assert.equal(sampleSections[0].endSec, null);
+    assert.equal(sampleSections[1].startSec, null);
+
+    // Forced transition (manual seek) at t=1.8s DOES transition immediately
+    timeline.wordSeen({ sectionId: 'sec-2', original: 'Spurious', globalIdx: 50 }, true, true);
+    assert.equal(timeline.activeId, 'sec-2');
+    assert.equal(sampleSections[0].endSec, 1.8);
+    assert.equal(sampleSections[1].startSec, 1.7);
+  });
+
   test('ignores timestamp mutation when isSessionActive is false', () => {
     elapsedSec = 5.0;
     timeline.wordSeen({ sectionId: 'sec-1', original: 'Test' }, false);
@@ -129,5 +153,59 @@ describe('TeleprompterTimeline - Section Boundary & Retake State Machine', () =>
     assert.equal(sampleSections[1].startSec, null);
     assert.equal(sampleSections[1].endSec, null);
     assert.equal(changedSection.title, 'Main Story');
+  });
+
+  test('missed boundary words use cadence lookback', () => {
+    // Section 1 active at t=1.0s
+    elapsedSec = 1.0;
+    timeline.wordSeen({ sectionId: 'sec-1', original: 'Welcome', globalIdx: 0 }, true);
+    assert.equal(sampleSections[0].startSec, 0.9);
+
+    // Speaker progresses and Whisper skips words 50..52 in Section 2, first seeing word 53 at t=12.0s
+    elapsedSec = 12.0;
+    timeline.wordSeen({ sectionId: 'sec-2', original: 'Deep', globalIdx: 53 }, true);
+
+    // 3 missed words * 0.4s = 1.2s lookback => 12.0 - 1.2 = 10.8s
+    assert.equal(sampleSections[0].endSec, 10.8);
+    assert.equal(sampleSections[1].startSec, 10.8);
+    assert.equal(timeline.activeId, 'sec-2');
+  });
+
+  test('unreached trailing sections resolve correctly when unaccounted time remains', () => {
+    sampleSections[0].startSec = 1.0;
+    sampleSections[0].endSec = 4.0;
+    sampleSections[1].startSec = null;
+    sampleSections[1].endSec = null;
+    sampleSections[2].startSec = null;
+    sampleSections[2].endSec = null;
+
+    // Session recorded 10.0s of audio, leaving 6.0s unaccounted for across sec-2 and sec-3
+    const resolved = timeline.resolveBoundaries(10.0);
+
+    assert.equal(resolved[0].startSec, 1.0);
+    assert.equal(resolved[0].endSec, 4.0);
+
+    // sec-2 gets 4.0 to 7.0 (3.0s slice)
+    assert.equal(resolved[1].startSec, 4.0);
+    assert.equal(resolved[1].endSec, 7.0);
+
+    // sec-3 gets 7.0 to 10.0 (3.0s slice)
+    assert.equal(resolved[2].startSec, 7.0);
+    assert.equal(resolved[2].endSec, 10.0);
+  });
+
+  test('unreached trailing sections without unaccounted elapsed time remain null', () => {
+    sampleSections[0].startSec = 1.0;
+    sampleSections[0].endSec = 5.0;
+    sampleSections[1].startSec = null;
+    sampleSections[1].endSec = null;
+
+    // Session ended exactly when Section 1 ended
+    const resolved = timeline.resolveBoundaries(5.0);
+
+    assert.equal(resolved[0].startSec, 1.0);
+    assert.equal(resolved[0].endSec, 5.0);
+    assert.equal(resolved[1].startSec, null);
+    assert.equal(resolved[1].endSec, null);
   });
 });

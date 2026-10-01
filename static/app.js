@@ -31,6 +31,8 @@
   let wsConnected = false;
   let modelReady = false;
   let browserAudio = false;
+  let isRestartingServer = false;
+  let serverShutDown = false;
 
   // Browser-audio streaming state handled by mediaSession
 
@@ -43,6 +45,22 @@
   const optAutoFormatOnPaste = document.getElementById('opt-auto-format-on-paste');
   const optPersistTranscript = document.getElementById('opt-persist-transcript');
   const btnClearTranscript = document.getElementById('btn-clear-transcript');
+  const btnExpandTranscript = document.getElementById('btn-expand-transcript');
+  const modalScriptEditor = document.getElementById('modal-script-editor');
+  const modalTranscriptInput = document.getElementById('modal-transcript-input');
+  const btnCloseScriptModal = document.getElementById('btn-close-script-modal');
+  const btnModalCancel = document.getElementById('btn-modal-cancel');
+  const btnModalApply = document.getElementById('btn-modal-apply');
+  const btnModalAutoFormat = document.getElementById('btn-modal-auto-format');
+  const btnModalImportFile = document.getElementById('btn-modal-import-file');
+  const btnModalClear = document.getElementById('btn-modal-clear');
+  const modalStatWords = document.getElementById('modal-stat-words');
+  const modalStatDuration = document.getElementById('modal-stat-duration');
+  const modalStatSections = document.getElementById('modal-stat-sections');
+  const modalScriptToast = document.getElementById('modal-script-toast');
+  const btnModalFontSm = document.getElementById('btn-modal-font-sm');
+  const btnModalFontMd = document.getElementById('btn-modal-font-md');
+  const btnModalFontLg = document.getElementById('btn-modal-font-lg');
   const formatToast = document.getElementById('format-toast');
   const linesContainer = document.getElementById('lines-container');
   const scrollingContent = document.getElementById('scrolling-content');
@@ -62,6 +80,14 @@
   const btnRetake = document.getElementById('btn-retake');
   const btnRetakeText = document.getElementById('btn-retake-text');
   const optRetakeHotkey = document.getElementById('opt-retake-hotkey');
+  const btnRestartServer = document.getElementById('btn-restart-server');
+  const btnShutdownServer = document.getElementById('btn-shutdown-server');
+  const serverStatusPill = document.getElementById('server-status-pill');
+  const modalServerAction = document.getElementById('modal-server-action');
+  const serverActionIcon = document.getElementById('server-action-icon');
+  const serverActionTitle = document.getElementById('server-action-title');
+  const serverActionDesc = document.getElementById('server-action-desc');
+  const serverActionFooter = document.getElementById('server-action-footer');
 
 
   let retakeHotkey = (configStore && configStore.get('ui.retake_hotkey')) || 'r';
@@ -156,6 +182,10 @@
         if (!confirm('Are you sure you want to clear the transcript?')) return;
       }
       transcriptInput.value = '';
+      if (modalTranscriptInput) {
+        modalTranscriptInput.value = '';
+        if (typeof updateModalStats === 'function') updateModalStats();
+      }
       if (persistTranscript) {
         if (configStore) configStore.set('script.saved_transcript', '');
         localStorage.removeItem('teleprompter_saved_transcript');
@@ -709,6 +739,15 @@
       wsConnected = true;
       wsStatus.textContent = 'connected';
       wsStatus.className = 'text-[10px] px-2 py-0.5 rounded bg-green-950 text-green-400 font-mono border border-green-500/30';
+      if (serverStatusPill) {
+        serverStatusPill.textContent = 'Online';
+        serverStatusPill.className = 'text-[10px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 font-mono border border-emerald-700/50';
+      }
+      if (isRestartingServer) {
+        isRestartingServer = false;
+        closeServerActionModal();
+        showFormatToast('Server reconnected ✓');
+      }
       const savedEngine = localStorage.getItem('teleprompter_engine_speed');
       if (savedEngine) {
         send({ type: 'set_engine', mode: savedEngine });
@@ -718,7 +757,17 @@
     ws.onclose = () => {
       wsConnected = false;
       updateStartButton();
-      setBadge(wsStatus, 'reconnecting…', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
+      if (serverStatusPill) {
+        serverStatusPill.textContent = serverShutDown ? 'Offline' : (isRestartingServer ? 'Restarting' : 'Reconnecting');
+        serverStatusPill.className = serverShutDown
+          ? 'text-[10px] px-1.5 py-0.5 rounded bg-red-950 text-red-400 font-mono border border-red-700/50'
+          : 'text-[10px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-400 font-mono border border-amber-700/50';
+      }
+      if (serverShutDown) {
+        setBadge(wsStatus, 'offline', 'bg-red-950 text-red-400 border-red-500/30');
+        return;
+      }
+      setBadge(wsStatus, isRestartingServer ? 'restarting…' : 'reconnecting…', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
       setTimeout(connect, 1500);
     };
     ws.onmessage = (ev) => {
@@ -821,6 +870,15 @@
         takeSavedListeners.forEach((fn) => {
           try { fn(msg); } catch (_) {}
         });
+        break;
+      case 'server_stopping':
+        if (msg.action === 'restart') {
+          isRestartingServer = true;
+          showServerRestartingState();
+        } else if (msg.action === 'shutdown') {
+          serverShutDown = true;
+          showServerShutdownState();
+        }
         break;
       case 'error':
         speechHud.textContent = '⚠ ' + msg.message;
@@ -1179,6 +1237,10 @@
       } else {
         transcriptInput.value = rawText;
       }
+      if (modalTranscriptInput) {
+        modalTranscriptInput.value = transcriptInput.value;
+        if (typeof updateModalStats === 'function') updateModalStats();
+      }
       saveTranscriptIfEnabled();
       parseAndRenderTranscript();
       updateStartButton();
@@ -1188,9 +1250,189 @@
   });
 
   transcriptInput.addEventListener('input', () => {
+    if (modalTranscriptInput && modalScriptEditor && !modalScriptEditor.classList.contains('hidden')) {
+      modalTranscriptInput.value = transcriptInput.value;
+      if (typeof updateModalStats === 'function') updateModalStats();
+    }
     saveTranscriptIfEnabled();
     parseAndRenderTranscript();
     updateStartButton();
+  });
+
+  // ---- Script Editor Modal Controller ----------------------------------------
+  function updateModalStats() {
+    if (!modalTranscriptInput) return;
+    const text = modalTranscriptInput.value || '';
+    const words = text.trim() ? text.trim().split(/\s+/).filter(w => !w.startsWith('#')).length : 0;
+    const sections = (text.match(/^#[^\n]+/gm) || []).length;
+    const totalSecs = Math.round((words / 135) * 60);
+    const mins = Math.floor(totalSecs / 60);
+    const secs = totalSecs % 60;
+    const durationStr = mins > 0 ? `~${mins}m ${secs}s` : `~${secs}s`;
+
+    if (modalStatWords) modalStatWords.textContent = `${words} ${words === 1 ? 'word' : 'words'}`;
+    if (modalStatDuration) modalStatDuration.textContent = durationStr;
+    if (modalStatSections) modalStatSections.textContent = `${sections} ${sections === 1 ? 'section' : 'sections'}`;
+  }
+
+  function showModalScriptToast(msg = 'Saved & Applied ✓') {
+    if (!modalScriptToast) return;
+    modalScriptToast.textContent = msg;
+    modalScriptToast.classList.remove('opacity-0');
+    modalScriptToast.classList.add('opacity-100');
+    setTimeout(() => {
+      modalScriptToast.classList.remove('opacity-100');
+      modalScriptToast.classList.add('opacity-0');
+    }, 1800);
+  }
+
+  function openScriptModal() {
+    if (!modalScriptEditor || !modalTranscriptInput) return;
+    modalTranscriptInput.value = transcriptInput ? transcriptInput.value : '';
+    updateModalStats();
+    modalScriptEditor.classList.remove('hidden');
+    setTimeout(() => {
+      modalTranscriptInput.focus();
+    }, 50);
+  }
+
+  function closeScriptModal() {
+    if (!modalScriptEditor) return;
+    modalScriptEditor.classList.add('hidden');
+  }
+
+  function applyModalScript() {
+    if (modalTranscriptInput && transcriptInput) {
+      transcriptInput.value = modalTranscriptInput.value;
+      saveTranscriptIfEnabled();
+      updateClearButtonVisibility();
+      parseAndRenderTranscript();
+      updateStartButton();
+      showModalScriptToast('Saved & Applied ✓');
+    }
+  }
+
+  if (btnExpandTranscript) {
+    btnExpandTranscript.addEventListener('click', openScriptModal);
+  }
+  if (btnCloseScriptModal) {
+    btnCloseScriptModal.addEventListener('click', closeScriptModal);
+  }
+  if (btnModalCancel) {
+    btnModalCancel.addEventListener('click', closeScriptModal);
+  }
+  if (btnModalApply) {
+    btnModalApply.addEventListener('click', () => {
+      applyModalScript();
+      closeScriptModal();
+    });
+  }
+
+  if (modalTranscriptInput) {
+    modalTranscriptInput.addEventListener('input', () => {
+      if (transcriptInput) {
+        transcriptInput.value = modalTranscriptInput.value;
+        saveTranscriptIfEnabled();
+        updateClearButtonVisibility();
+        parseAndRenderTranscript();
+        updateStartButton();
+      }
+      updateModalStats();
+    });
+  }
+
+  if (btnModalAutoFormat && modalTranscriptInput) {
+    btnModalAutoFormat.addEventListener('click', () => {
+      if (!modalTranscriptInput.value || !modalTranscriptInput.value.trim()) return;
+      const formatted = formatScriptForPrompter(modalTranscriptInput.value);
+      modalTranscriptInput.value = formatted;
+      if (transcriptInput) transcriptInput.value = formatted;
+      saveTranscriptIfEnabled();
+      updateClearButtonVisibility();
+      parseAndRenderTranscript();
+      updateStartButton();
+      updateModalStats();
+      showModalScriptToast('Auto-formatted ✓');
+    });
+  }
+
+  if (btnModalImportFile && fileInput) {
+    btnModalImportFile.addEventListener('click', () => {
+      fileInput.click();
+    });
+  }
+
+  if (btnModalClear && modalTranscriptInput) {
+    btnModalClear.addEventListener('click', () => {
+      if (!modalTranscriptInput.value.trim()) return;
+      if (modalTranscriptInput.value.trim().length > 30) {
+        if (!confirm('Are you sure you want to clear the transcript?')) return;
+      }
+      modalTranscriptInput.value = '';
+      if (transcriptInput) {
+        transcriptInput.value = '';
+        if (persistTranscript) {
+          if (configStore) configStore.set('script.saved_transcript', '');
+          localStorage.removeItem('teleprompter_saved_transcript');
+        }
+        updateClearButtonVisibility();
+        parseAndRenderTranscript();
+        updateStartButton();
+      }
+      updateModalStats();
+      showModalScriptToast('Cleared');
+    });
+  }
+
+  function setModalFontSize(size) {
+    if (!modalTranscriptInput) return;
+    modalTranscriptInput.classList.remove('text-xs', 'text-sm', 'text-base', 'text-lg');
+    if (size === 'sm') modalTranscriptInput.classList.add('text-xs');
+    else if (size === 'lg') modalTranscriptInput.classList.add('text-base');
+    else modalTranscriptInput.classList.add('text-sm');
+
+    [btnModalFontSm, btnModalFontMd, btnModalFontLg].forEach((btn) => {
+      if (btn) {
+        btn.classList.remove('bg-gray-800', 'text-indigo-300', 'font-semibold');
+        btn.classList.add('text-gray-400');
+      }
+    });
+    const activeBtn = size === 'sm' ? btnModalFontSm : size === 'lg' ? btnModalFontLg : btnModalFontMd;
+    if (activeBtn) {
+      activeBtn.classList.remove('text-gray-400');
+      activeBtn.classList.add('bg-gray-800', 'text-indigo-300', 'font-semibold');
+    }
+  }
+
+  if (btnModalFontSm) btnModalFontSm.addEventListener('click', () => setModalFontSize('sm'));
+  if (btnModalFontMd) btnModalFontMd.addEventListener('click', () => setModalFontSize('md'));
+  if (btnModalFontLg) btnModalFontLg.addEventListener('click', () => setModalFontSize('lg'));
+
+  if (transcriptInput) {
+    transcriptInput.addEventListener('dblclick', openScriptModal);
+  }
+
+  if (modalScriptEditor) {
+    modalScriptEditor.addEventListener('click', (e) => {
+      if (e.target === modalScriptEditor) closeScriptModal();
+    });
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modalScriptEditor && !modalScriptEditor.classList.contains('hidden')) {
+      closeScriptModal();
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'e') {
+      const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+      if (modalScriptEditor && !modalScriptEditor.classList.contains('hidden')) {
+        e.preventDefault();
+        closeScriptModal();
+      } else if (activeTag !== 'input' || document.activeElement === transcriptInput) {
+        e.preventDefault();
+        openScriptModal();
+      }
+    }
   });
 
   // ---- Transcript parsing ----------------------------------------------------
@@ -1224,7 +1466,7 @@
     sectionTimeline = new TeleprompterTimeline.SectionTimeline(
       parsedSections,
       () => (Date.now() - sessionStartTime) / 1000,
-      { onActiveSectionChange: updateRetakeButtonLabel }
+      { onActiveSectionChange: updateRetakeButtonLabel, minDwellSec: 2.0 }
     );
 
     if (linesData.length === 0 || allWords.length === 0) {
@@ -1244,7 +1486,7 @@
   }
 
   // ---- Highlighting & scrolling --------------------------------------------
-  function updateHighlighting(wordIndex) {
+  function updateHighlighting(wordIndex, isManual = false) {
     if (!allWords.length) return;
 
     const res = viewport.highlightWord(wordIndex, allWords);
@@ -1254,7 +1496,7 @@
     currentLineIndex = res.lineIdx;
 
     if (parsedSections.length > 0 && res.activeWordObj.sectionId) {
-      handleSectionWordProgress(res.activeWordObj);
+      handleSectionWordProgress(res.activeWordObj, isManual);
     }
   }
 
@@ -1268,12 +1510,12 @@
   let sectionTimeline = new TeleprompterTimeline.SectionTimeline(
     parsedSections,
     () => (Date.now() - sessionStartTime) / 1000,
-    { onActiveSectionChange: updateRetakeButtonLabel }
+    { onActiveSectionChange: updateRetakeButtonLabel, minDwellSec: 2.0 }
   );
 
   // ---- Thin adapters (preserve external call sites unchanged) ---------------
-  function handleSectionWordProgress(targetWord) {
-    sectionTimeline.wordSeen(targetWord, isPrompting);
+  function handleSectionWordProgress(targetWord, isManual = false) {
+    sectionTimeline.wordSeen(targetWord, isPrompting, isManual);
     currentActiveSectionId = sectionTimeline.activeId;
   }
 
@@ -1283,7 +1525,7 @@
     if (!result) return;
 
     currentWordIndex = result.seekIndex;
-    updateHighlighting(currentWordIndex);
+    updateHighlighting(currentWordIndex, true);
     send({ type: 'seek', word_index: currentWordIndex });
 
     setBadge(vadStatus, 'RE-TAKE READY', 'bg-amber-950 text-amber-300 border-amber-500/40');
@@ -1320,7 +1562,15 @@
 
         recIndicator.classList.add('hidden');
 
-        send({ type: 'start', words: allWords.map((w) => w.original), rehearsal: true, wpm: 140, audio_device: activeAudioSource });
+        const sectionBoundaries = parsedSections.map((s) => s.startIndex).filter((n) => n !== null && n !== undefined);
+        send({
+          type: 'start',
+          words: allWords.map((w) => w.original),
+          section_boundaries: sectionBoundaries,
+          rehearsal: true,
+          wpm: 140,
+          audio_device: activeAudioSource
+        });
 
         updateStopButtonText();
         btnStart.classList.add('hidden');
@@ -1385,7 +1635,14 @@
         recIndicator.classList.add('hidden');
       }
 
-      send({ type: 'start', words: allWords.map((w) => w.original), wpm: 140, audio_device: activeAudioSource });
+      const sectionBoundaries = parsedSections.map((s) => s.startIndex).filter((n) => n !== null && n !== undefined);
+      send({
+        type: 'start',
+        words: allWords.map((w) => w.original),
+        section_boundaries: sectionBoundaries,
+        wpm: 140,
+        audio_device: activeAudioSource
+      });
 
       sessionStartTime = Date.now();
       currentActiveSectionId = null;
@@ -1449,9 +1706,9 @@
       btnRetake.classList.remove('flex');
     }
 
-    // Brief flush window (500ms): allow in-flight Whisper recognition results
+    // Flush window (1200ms): allow in-flight Whisper recognition results (600ms CPU tick + 500ms margin)
     // and sync messages to update active section transitions before sealing boundaries.
-    const FLUSH_DELAY_MS = 500;
+    const FLUSH_DELAY_MS = 1200;
     setTimeout(() => {
       isPrompting = false;
       isStopping = false;
@@ -1462,8 +1719,9 @@
 
       const sessionEndTime = Date.now();
       const totalSessionSec = (sessionEndTime - sessionStartTime) / 1000;
-      // Close the active section via SectionTimeline (C1)
+      // Close the active section via SectionTimeline (C1) and resolve fallback boundaries (Step 2)
       sectionTimeline.close(totalSessionSec);
+      sectionTimeline.resolveBoundaries(totalSessionSec);
       currentActiveSectionId = null;
 
       send({ type: 'stop' });
@@ -1548,11 +1806,11 @@
 
     if (e.code === 'ArrowDown' && allWords.length) {
       currentWordIndex = Math.min(allWords.length - 1, currentWordIndex + 1);
-      updateHighlighting(currentWordIndex);
+      updateHighlighting(currentWordIndex, true);
       send({ type: 'seek', word_index: currentWordIndex });
     } else if (e.code === 'ArrowUp' && allWords.length) {
       currentWordIndex = Math.max(0, currentWordIndex - 1);
-      updateHighlighting(currentWordIndex);
+      updateHighlighting(currentWordIndex, true);
       send({ type: 'seek', word_index: currentWordIndex });
     }
   });
@@ -1564,7 +1822,7 @@
       const idx = parseInt(wordSpan.id.replace('w-', ''), 10);
       if (!isNaN(idx) && idx >= 0 && idx < allWords.length) {
         currentWordIndex = idx;
-        updateHighlighting(idx);
+        updateHighlighting(idx, true);
         send({ type: 'seek', word_index: idx });
       }
     }
@@ -1604,6 +1862,94 @@
   function openExportModal(takes, mode, format) { if (exportSession) exportSession.open(takes, mode, format); }
   function closeExportModal() { if (exportSession) exportSession.close(); }
 
+  // ---- Server Control Subsystem ---------------------------------------------
+  function closeServerActionModal() {
+    if (modalServerAction) {
+      modalServerAction.classList.add('hidden');
+    }
+  }
+
+  function showServerRestartConfirm() {
+    if (!modalServerAction) return;
+    serverActionIcon.className = 'w-12 h-12 mx-auto rounded-full bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-400';
+    serverActionIcon.innerHTML = `<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>`;
+    serverActionTitle.textContent = 'Restart Teleprompter Server?';
+    serverActionDesc.innerHTML = 'The Python server will release audio devices, reload speech models, and restart in place. The browser will reconnect automatically.';
+    serverActionFooter.innerHTML = `
+      <button id="btn-modal-cancel" type="button" class="px-3.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white font-medium rounded-lg text-xs transition cursor-pointer">Cancel</button>
+      <button id="btn-modal-confirm-restart" type="button" class="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-semibold rounded-lg text-xs transition shadow cursor-pointer">Restart Server</button>
+    `;
+    modalServerAction.classList.remove('hidden');
+
+    const btnCancel = document.getElementById('btn-modal-cancel');
+    const btnConfirm = document.getElementById('btn-modal-confirm-restart');
+    if (btnCancel) btnCancel.addEventListener('click', closeServerActionModal);
+    if (btnConfirm) btnConfirm.addEventListener('click', executeServerRestart);
+  }
+
+  function showServerShutdownConfirm() {
+    if (!modalServerAction) return;
+    serverActionIcon.className = 'w-12 h-12 mx-auto rounded-full bg-red-500/20 border border-red-400/40 flex items-center justify-center text-red-400';
+    serverActionIcon.innerHTML = `<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 4.243a9 9 0 01-6.364-2.636 9 9 0 010-12.728m0 0l2.829 2.829M12 3v9"/></svg>`;
+    serverActionTitle.textContent = 'Shut Down Teleprompter Server?';
+    serverActionDesc.innerHTML = 'The server process will terminate completely. To use the teleprompter again later, you will need to restart it from your terminal using <code class="text-indigo-300 font-mono text-xs bg-gray-950 px-1.5 py-0.5 rounded border border-gray-800">./run.sh</code>.';
+    serverActionFooter.innerHTML = `
+      <button id="btn-modal-cancel" type="button" class="px-3.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white font-medium rounded-lg text-xs transition cursor-pointer">Cancel</button>
+      <button id="btn-modal-confirm-shutdown" type="button" class="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg text-xs transition shadow cursor-pointer">Shut Down Server</button>
+    `;
+    modalServerAction.classList.remove('hidden');
+
+    const btnCancel = document.getElementById('btn-modal-cancel');
+    const btnConfirm = document.getElementById('btn-modal-confirm-shutdown');
+    if (btnCancel) btnCancel.addEventListener('click', closeServerActionModal);
+    if (btnConfirm) btnConfirm.addEventListener('click', executeServerShutdown);
+  }
+
+  function showServerRestartingState() {
+    if (!modalServerAction) return;
+    serverActionIcon.className = 'w-12 h-12 mx-auto rounded-full bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-400';
+    serverActionIcon.innerHTML = `<svg class="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`;
+    serverActionTitle.textContent = 'Restarting Server…';
+    serverActionDesc.innerHTML = 'The server is reloading. Reconnecting automatically…';
+    serverActionFooter.innerHTML = `<span class="text-[11px] text-gray-400 font-mono animate-pulse">Waiting for backend…</span>`;
+    modalServerAction.classList.remove('hidden');
+  }
+
+  function showServerShutdownState() {
+    if (!modalServerAction) return;
+    serverActionIcon.className = 'w-12 h-12 mx-auto rounded-full bg-red-500/20 border border-red-400/40 flex items-center justify-center text-red-400';
+    serverActionIcon.innerHTML = `<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>`;
+    serverActionTitle.textContent = 'Server Shut Down';
+    serverActionDesc.innerHTML = 'The local Python server has stopped. You can safely close this browser tab.<br><br>To restart later, run in your terminal:<br><code class="inline-block mt-1 text-indigo-300 font-mono text-xs bg-gray-950 px-2.5 py-1 rounded border border-gray-800">./run.sh</code>';
+    serverActionFooter.innerHTML = `<span class="text-[11px] text-red-400 font-mono">Process terminated</span>`;
+    modalServerAction.classList.remove('hidden');
+  }
+
+  function executeServerRestart() {
+    isRestartingServer = true;
+    showServerRestartingState();
+    send({ type: 'restart_server' });
+  }
+
+  function executeServerShutdown() {
+    serverShutDown = true;
+    showServerShutdownState();
+    send({ type: 'shutdown_server' });
+  }
+
+  if (btnRestartServer) {
+    btnRestartServer.addEventListener('click', showServerRestartConfirm);
+  }
+  if (btnShutdownServer) {
+    btnShutdownServer.addEventListener('click', showServerShutdownConfirm);
+  }
+  if (modalServerAction) {
+    modalServerAction.addEventListener('click', (e) => {
+      if (e.target === modalServerAction && !isRestartingServer && !serverShutDown) {
+        closeServerActionModal();
+      }
+    });
+  }
 
   document.getElementById('btn-toggle-panel').addEventListener('click', () => {
     document.getElementById('side-panel').classList.toggle('hidden');

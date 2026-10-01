@@ -87,7 +87,7 @@ def _similarity(a, b):
 
 
 class Aligner:
-    def __init__(self, words, window=5, max_lookahead=25, tolerance=5, observer=None):
+    def __init__(self, words, window=5, max_lookahead=25, tolerance=5, observer=None, section_boundaries=None):
         self.raw_words = list(words)
         self.script = [normalize(w) for w in words]
         self.cursor = 0
@@ -96,6 +96,11 @@ class Aligner:
         self.tolerance = tolerance
         self.streak = 0
         self.observer = observer
+        self.section_boundaries = set(section_boundaries or [])
+
+    def set_section_boundaries(self, boundaries):
+        """Set or update section boundary start indices."""
+        self.section_boundaries = set(boundaries or [])
 
     def attach_observer(self, observer):
         """Attach an observer for telemetry and fumble tracking."""
@@ -231,12 +236,13 @@ class Aligner:
 
             # -------------------------------------------------------------
             # Phase 2: Forward Jump / Lookahead Recovery
-            # MANDATORY multi-word sequence confirmation. Single-word matches
-            # are NEVER allowed to jump beyond the local window.
+            # Mandatory multi-word sequence confirmation for internal jumps.
+            # Single distinctive tokens (>= 5 chars, high confidence) allowed across section boundaries.
             # -------------------------------------------------------------
             jump_matched = False
             lookahead_limit = min(len(self.script), self.cursor + self.max_lookahead)
             for j in range(local_limit, lookahead_limit):
+                # Multi-word sequence match
                 if i + 1 < len(asr_words) and j + 1 < len(self.script):
                     s0 = _similarity(tok, self.script[j])
                     s1 = _similarity(asr_words[i + 1], self.script[j + 1])
@@ -268,6 +274,7 @@ class Aligner:
                                 if self.observer:
                                     self.observer.on_jump(matched_indices, cursor_before)
                                 break
+
 
             if jump_matched:
                 continue

@@ -36,6 +36,8 @@ class PrompterSession:
         self,
         event_sink: Optional[Callable[[Dict[str, Any]], None]] = None,
         on_config_save: Optional[Callable[..., None]] = None,
+        on_restart: Optional[Callable[[], None]] = None,
+        on_shutdown: Optional[Callable[[], None]] = None,
         audio_source: Optional[audio_capture.AudioSource] = None,
         trans: Optional[transcriber.Transcriber] = None,
         mic: Optional[str] = None,
@@ -55,6 +57,8 @@ class PrompterSession:
     ):
         self.event_sink = event_sink
         self.on_config_save = on_config_save
+        self.on_restart = on_restart
+        self.on_shutdown = on_shutdown
         self.config_path = config_path
         self.host = host
         self.port = port
@@ -249,6 +253,7 @@ class PrompterSession:
         words: List[str],
         rehearsal: bool = False,
         audio_device: Optional[Union[int, str]] = None,
+        section_boundaries: Optional[List[int]] = None,
     ) -> bool:
         """Start or restart a teleprompter tracking session."""
         if audio_device is not None and str(audio_device) != str(self.audio_source.active_device_id):
@@ -275,6 +280,7 @@ class PrompterSession:
             window=self.align_window,
             tolerance=self.align_tolerance,
             observer=self.rehearsal_observer,
+            section_boundaries=section_boundaries,
         )
 
         if hasattr(self.transcriber, "start"):
@@ -282,7 +288,12 @@ class PrompterSession:
 
         if hasattr(self.transcriber, "begin"):
             try:
-                self.transcriber.begin(words, is_rehearsal=self.is_rehearsal, observer=self.rehearsal_observer)
+                self.transcriber.begin(
+                    words,
+                    is_rehearsal=self.is_rehearsal,
+                    observer=self.rehearsal_observer,
+                    section_boundaries=section_boundaries,
+                )
             except TypeError:
                 self.transcriber.begin(words, is_rehearsal=self.is_rehearsal)
 
@@ -440,6 +451,24 @@ class PrompterSession:
             self.emit(payload)
             return payload
 
+    def restart_server(self) -> None:
+        """Notify clients and trigger server restart."""
+        self.emit({"type": "server_stopping", "action": "restart"})
+        if self.on_restart:
+            try:
+                self.on_restart()
+            except Exception as e:
+                print(f"Error in on_restart: {e}", flush=True)
+
+    def shutdown_server(self) -> None:
+        """Notify clients and trigger server shutdown."""
+        self.emit({"type": "server_stopping", "action": "shutdown"})
+        if self.on_shutdown:
+            try:
+                self.on_shutdown()
+            except Exception as e:
+                print(f"Error in on_shutdown: {e}", flush=True)
+
     # -- Message Dispatcher ---------------------------------------------------
 
     def dispatch(self, raw_or_msg: Union[str, Dict[str, Any]]) -> None:
@@ -460,6 +489,7 @@ class PrompterSession:
                 words=msg.get("words") or [],
                 rehearsal=bool(msg.get("rehearsal")),
                 audio_device=msg.get("audio_device"),
+                section_boundaries=msg.get("section_boundaries") or [],
             )
         elif mtype == "stop":
             self.stop_session()
@@ -481,6 +511,10 @@ class PrompterSession:
             self.ingest_audio_frames(msg.get("data"))
         elif mtype == "save_take":
             self.save_take(msg.get("filename", ""), msg.get("data", ""))
+        elif mtype == "restart_server":
+            self.restart_server()
+        elif mtype == "shutdown_server":
+            self.shutdown_server()
 
 
 # Convenient alias
