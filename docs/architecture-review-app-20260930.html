@@ -33,11 +33,11 @@
         <div class="flex items-start justify-between">
           <div>
             <h1 class="text-2xl font-bold tracking-tight text-slate-900 font-serif">Architecture Review: static/app.js Monolith Deconstruction</h1>
-            <p class="text-slate-500 text-sm mt-1">Teleprompter &middot; <span class="mono">static/app.js</span> (2,007 lines, down from 2,374) &middot; 30 Sep 2026</p>
+            <p class="text-slate-500 text-sm mt-1">Teleprompter &middot; <span class="mono">static/app.js</span> (1,618 lines, down from 2,374) &middot; 30 Sep 2026</p>
           </div>
           <div class="text-right text-xs text-slate-400 mono space-y-1 pt-1">
             <div>Target: static/app.js</div>
-            <div>Companions: static/export.js &middot; static/media.js &middot; static/config.js</div>
+            <div>Companions: static/export.js &middot; static/cues.js &middot; static/timeline.js &middot; static/viewport.js</div>
           </div>
         </div>
 
@@ -154,14 +154,15 @@
         </article>
 
         <!-- Candidate 2: RehearsalCues & Vocabulary (static/cues.js) -->
-        <article id="candidate-2" class="border-2 border-emerald-500/50 rounded-xl bg-white p-6 shadow-sm space-y-6">
+        <article id="candidate-2" class="border border-slate-200 rounded-xl bg-white p-6 shadow-sm space-y-6 opacity-90">
           <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-4">
             <div>
               <h2 class="text-lg font-bold text-slate-900 font-serif">2. Deepen RehearsalCues &amp; Vocabulary Subsystem into Standalone Module</h2>
               <div class="mt-2 flex items-center gap-2">
+                <span class="bg-emerald-600 text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">Completed</span>
                 <span class="badge-strong px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Strong</span>
                 <span class="tag-cat px-2 py-0.5 rounded text-[10px] mono">in-process</span>
-                <span class="text-xs text-emerald-600 font-semibold mono">Sheds ~505 lines from app.js (2,007 &rarr; 1,502)</span>
+                <span class="text-xs text-emerald-600 font-semibold mono">14 unit tests &middot; static/cues.js</span>
               </div>
             </div>
             <div class="text-xs text-slate-500 mono bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-md">
@@ -251,14 +252,15 @@
         </article>
 
         <!-- Candidate 3: PrompterViewport Display Engine (static/viewport.js) -->
-        <article id="candidate-3" class="border border-slate-200 rounded-xl bg-white p-6 shadow-sm space-y-6">
+        <article id="candidate-3" class="border border-slate-200 rounded-xl bg-white p-6 shadow-sm space-y-6 opacity-90">
           <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-4">
             <div>
               <h2 class="text-lg font-bold text-slate-900 font-serif">3. Deepen PrompterViewport Display &amp; Scrolling Engine</h2>
               <div class="mt-2 flex items-center gap-2">
-                <span class="badge-explore px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Worth exploring</span>
+                <span class="bg-emerald-600 text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">Completed</span>
+                <span class="badge-strong px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Strong</span>
                 <span class="tag-cat px-2 py-0.5 rounded text-[10px] mono">in-process</span>
-                <span class="text-xs text-slate-400 mono">Sheds ~260 lines from app.js</span>
+                <span class="text-xs text-emerald-600 font-semibold mono">8 unit tests &middot; static/viewport.js</span>
               </div>
             </div>
             <div class="text-xs text-slate-500 mono bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-md">
@@ -332,14 +334,15 @@
         </article>
 
         <!-- Candidate 4: SectionTimeline Standalone Module (static/timeline.js) -->
-        <article id="candidate-4" class="border border-slate-200 rounded-xl bg-white p-6 shadow-sm space-y-6">
+        <article id="candidate-4" class="border border-slate-200 rounded-xl bg-white p-6 shadow-sm space-y-6 opacity-90">
           <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-4">
             <div>
               <h2 class="text-lg font-bold text-slate-900 font-serif">4. Extract SectionTimeline &amp; Retake Navigation into Dedicated Module</h2>
               <div class="mt-2 flex items-center gap-2">
-                <span class="badge-explore px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Worth exploring</span>
+                <span class="bg-emerald-600 text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">Completed</span>
+                <span class="badge-strong px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Strong</span>
                 <span class="tag-cat px-2 py-0.5 rounded text-[10px] mono">in-process</span>
-                <span class="text-xs text-slate-400 mono">Sheds ~120 lines from app.js</span>
+                <span class="text-xs text-emerald-600 font-semibold mono">8 unit tests &middot; static/timeline.js</span>
               </div>
             </div>
             <div class="text-xs text-slate-500 mono bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-md">
@@ -496,16 +499,16 @@
       <!-- Top Recommendation Section -->
       <section id="top-recommendation" class="border-2 border-indigo-500 rounded-xl bg-slate-950 text-white p-8 shadow-lg space-y-4">
         <div class="flex items-center justify-between">
-          <span class="text-xs uppercase tracking-wider text-indigo-400 font-bold mono">Top Recommendation</span>
-          <span class="text-xs text-slate-400 mono">Candidate 2 Deepening</span>
+          <span class="text-xs uppercase tracking-wider text-indigo-400 font-bold mono">Status Update</span>
+          <span class="text-xs text-emerald-400 mono font-semibold">Candidates 1, 2, 3, 4 Completed</span>
         </div>
-        <h3 class="text-xl font-bold font-serif text-white">Extract RehearsalCues &amp; Vocabulary Subsystem into static/cues.js</h3>
+        <h3 class="text-xl font-bold font-serif text-white">Candidates 2, 3, and 4 Deepened &amp; Extracted</h3>
         <p class="text-slate-300 text-sm leading-relaxed">
-          The rehearsal and vocabulary subsystem (Candidate 2) represents <strong>505 lines of friction</strong> inside <span class="mono text-slate-200">static/app.js</span>. It handles pronunciation sets, stumble classification (<span class="mono text-indigo-300">stumbled</span>, <span class="mono text-indigo-300">skipped</span>, <span class="mono text-indigo-300">repeated</span>), regex normalization, modal tag badges, and live prompter styling without a single automated test. Consolidating it into a deep <span class="mono text-indigo-300">static/cues.js</span> module immediately brings the app under 1,500 lines and provides a 100% testable seam without touching audio capture or server synchronization.
+          The <span class="mono text-indigo-300">static/cues.js</span>, <span class="mono text-indigo-300">static/timeline.js</span>, and <span class="mono text-indigo-300">static/viewport.js</span> subsystems have been successfully decoupled from <span class="mono text-slate-200">static/app.js</span> with 39 passing unit tests across 4 test suites. The monolith has shrunk by over 750 lines (2,374 &rarr; 1,618 lines).
         </p>
         <div class="pt-2">
-          <a href="#candidate-2" class="inline-flex items-center gap-2 text-xs font-semibold text-indigo-400 hover:text-indigo-300 transition">
-            <span>Jump to Candidate 2 Details</span>
+          <a href="#candidate-5" class="inline-flex items-center gap-2 text-xs font-semibold text-indigo-400 hover:text-indigo-300 transition">
+            <span>Next Horizon: Candidate 5 (WebSocket SyncClient)</span>
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
           </a>
         </div>

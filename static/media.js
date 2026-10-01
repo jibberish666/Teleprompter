@@ -414,8 +414,19 @@
     const totalDuration = audioBuffer.duration || (audioBuffer.length / audioBuffer.sampleRate) || 0;
 
     for (const sec of sections) {
-      const sStart = Math.max(0, (sec.startSec !== null && sec.startSec !== undefined ? sec.startSec : 0) - pad);
-      const sEnd = Math.min(totalDuration, (sec.endSec !== null && sec.endSec !== undefined ? sec.endSec : totalDuration) + pad);
+      // Guard against unreached or unstarted sections:
+      // If startSec is null, undefined, or NaN, this section was never reached or spoken.
+      if (sec.startSec === null || sec.startSec === undefined || isNaN(Number(sec.startSec))) {
+        continue;
+      }
+
+      const rawStart = Number(sec.startSec);
+      const rawEnd = (sec.endSec !== null && sec.endSec !== undefined && !isNaN(Number(sec.endSec)))
+        ? Number(sec.endSec)
+        : totalDuration;
+
+      const sStart = Math.max(0, rawStart - pad);
+      const sEnd = Math.min(totalDuration, rawEnd + pad);
 
       if (sEnd > sStart) {
         const sliceBuf = sliceAudioBuffer(audioBuffer, sStart, sEnd);
@@ -677,10 +688,10 @@
       let audioBuffer = null;
       if (decodeCtx) {
         try {
-          // Safeguard against Chromium decodeAudioData hanging on short WebM blobs
+          // Safeguard against Chromium decodeAudioData hanging on corrupt/empty blobs
           const decodePromise = decodeCtx.decodeAudioData(arrayBuffer.slice(0));
           const timeoutPromise = new Promise((_, rej) =>
-            setTimeout(() => rej(new Error('Audio decoding timed out')), 2000)
+            setTimeout(() => rej(new Error('Audio decoding timed out')), 15000)
           );
           audioBuffer = await Promise.race([decodePromise, timeoutPromise]);
         } catch (decErr) {
@@ -689,25 +700,29 @@
       }
 
       if (audioBuffer) {
-        if (audioFormat === 'wav') {
-          finalBlob = audioBufferToWav(audioBuffer);
-          finalExtension = 'wav';
-        } else if (audioFormat === 'mp3') {
-          finalBlob = audioBufferToMp3(audioBuffer, 192);
-          finalExtension = 'mp3';
-        }
-
+        finalExtension = audioFormat === 'wav' ? 'wav' : 'mp3';
         const effectiveMode = isAudioOnly ? 'audio' : 'video';
         const filename = getRecordingFilename(effectiveMode, finalExtension);
 
-        let takes;
+        let takes = null;
         if (sections.length > 0) {
           if (typeof onProgress === 'function') {
             onProgress('Extracting clean section takes…');
           }
           const result = processAudioTakes(audioBuffer, sections, audioFormat);
-          takes = result.takes;
+          takes = (result && result.takes && result.takes.length > 0) ? result.takes : null;
+        }
+
+        if (takes && takes.length > 0) {
+          const masterTake = takes.find((t) => t.isMaster) || takes[0];
+          finalBlob = masterTake.blob;
         } else {
+          // Fallback: encode master take from full audio buffer
+          if (audioFormat === 'wav') {
+            finalBlob = audioBufferToWav(audioBuffer);
+          } else if (audioFormat === 'mp3') {
+            finalBlob = audioBufferToMp3(audioBuffer, 192);
+          }
           takes = [{
             filename,
             title: 'Master Session Audio',
@@ -1029,8 +1044,14 @@
           return resolve(null);
         }
 
+        let safetyTimer = null;
+
         // onstop is now a thin adapter — all encode/slice logic lives in finalizeRecording() (C2)
         this.mediaRecorder.onstop = async () => {
+          if (safetyTimer) {
+            clearTimeout(safetyTimer);
+            safetyTimer = null;
+          }
           try {
             const result = await finalizeRecording(this.recordedChunks, {
               mimeType: (this.activeRecordingOptions && this.activeRecordingOptions.mimeType) || 'audio/webm',
@@ -1049,7 +1070,8 @@
           }
         };
 
-        const safetyTimer = setTimeout(() => {
+        safetyTimer = setTimeout(() => {
+          console.warn('[MEDIA] mediaRecorder.onstop failed to fire within safety threshold; invoking fallback.');
           if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
             try { this.mediaRecorder.stop(); } catch (_) {}
           }
@@ -1065,7 +1087,7 @@
             filename: filename,
             takes: [{ filename, title: effectiveMode === 'video' ? 'Master Session Video' : 'Master Session Audio', duration: sessionDurationSec, blob: fallbackBlob, isMaster: true }]
           });
-        }, 2500);
+        }, 15000);
 
         try {
           if (this.mediaRecorder.state === 'recording' && typeof this.mediaRecorder.requestData === 'function') {
@@ -1073,7 +1095,10 @@
           }
           this.mediaRecorder.stop();
         } catch (stopErr) {
-          clearTimeout(safetyTimer);
+          if (safetyTimer) {
+            clearTimeout(safetyTimer);
+            safetyTimer = null;
+          }
           console.warn('Error calling mediaRecorder.stop():', stopErr);
           resolve(null);
         }

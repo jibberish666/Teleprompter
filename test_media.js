@@ -316,5 +316,33 @@ describe('TeleprompterMedia - Section Take Slicing & Master Splicing', () => {
     const sec1 = takes[0];
     assert.equal(sec1.duration, 4.0, 'Clamped duration must equal full buffer duration');
   });
+
+  test('omits unreached sections with null timestamps and prevents ghost duplicate takes', () => {
+    const original = createMockBuffer(10, 1000);
+    const sections = [
+      { id: '1', title: 'Reached Section', startSec: 0.0, endSec: 4.0 },
+      { id: '2', title: 'Unreached Section 2', startSec: null, endSec: null },
+      { id: '3', title: 'Unreached Section 3', startSec: null, endSec: null }
+    ];
+
+    const { takes } = Media.processAudioTakes(original, sections, 'wav', 0.25);
+    assert.equal(takes.length, 2, 'Must only include reached section take and stitched master take');
+
+    const sec1 = takes.find((t) => t.filename === '1.wav');
+    assert.ok(sec1, 'Take 1.wav must exist');
+    assert.equal(sec1.title, 'Section [Reached Section]');
+    // 0.0 to 4.0 + 0.25 = 4.25s
+    assert.equal(sec1.duration, 4.25);
+
+    const sec2 = takes.find((t) => t.filename === '2.wav');
+    assert.equal(sec2, undefined, 'Unreached Section 2 must not produce a take');
+
+    const sec3 = takes.find((t) => t.filename === '3.wav');
+    assert.equal(sec3, undefined, 'Unreached Section 3 must not produce a take');
+
+    const master = takes.find((t) => t.filename === 'everything.wav');
+    assert.ok(master, 'Master take must exist');
+    assert.equal(master.duration, 4.25, 'Master take must only concatenate reached sections');
+  });
 });
 

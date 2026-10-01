@@ -255,275 +255,19 @@
     });
   }
 
-  // ---- Difficult Words State & Configuration -------------------------------
-  let difficultWordsList = [];
-  try {
-    if (configStore && Array.isArray(configStore.get('ui.difficult_words'))) {
-      difficultWordsList = configStore.get('ui.difficult_words');
-    } else {
-      const savedWords = localStorage.getItem('teleprompter_difficult_words');
-      if (savedWords) difficultWordsList = JSON.parse(savedWords);
-    }
-  } catch (_) {
-    difficultWordsList = [];
-  }
-
-  let difficultColor = configStore ? configStore.get('ui.difficult_color') : (localStorage.getItem('teleprompter_difficult_color') || '#f59e0b');
-  let difficultStyle = configStore ? configStore.get('ui.difficult_style') : (localStorage.getItem('teleprompter_difficult_style') || 'pill');
-
-  let difficultWordsSet = new Set(
-    difficultWordsList.map((w) => w.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '')).filter(Boolean)
-  );
-
-  // ---- Rehearsal / Trial Fumbled Words State ------------------------------
-  let rehearsalWordsList = [];
-  try {
-    if (configStore && Array.isArray(configStore.get('script.rehearsal_words'))) {
-      rehearsalWordsList = configStore.get('script.rehearsal_words');
-    } else {
-      const savedRehearsal = localStorage.getItem('teleprompter_rehearsal_words');
-      if (savedRehearsal) rehearsalWordsList = JSON.parse(savedRehearsal);
-    }
-  } catch (_) {
-    rehearsalWordsList = [];
-  }
-
-  let rehearsalWordsSet = new Set(
-    rehearsalWordsList.map((item) => (typeof item === 'string' ? item : item.clean || item.word).toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '')).filter(Boolean)
-  );
-
-  let rehearsalFilter = 'all'; // 'all' | 'skipped' | 'stumbled' | 'repeated'
-  let syncPrompterWithFilter = configStore ? configStore.get('ui.sync_fumble_filter') : false;
-  try {
-    if (!configStore) syncPrompterWithFilter = localStorage.getItem('teleprompter_sync_fumble_filter') === 'true';
-  } catch (_) {}
-
-  function updateCuesCountBadge() {
-    const countBadge = document.getElementById('difficult-count-badge');
-    if (!countBadge) return;
-    const diffCount = difficultWordsList.length;
-    const rehCount = rehearsalWordsList.length;
-    if (diffCount > 0 && rehCount > 0) {
-      countBadge.textContent = `${diffCount} diff · ${rehCount} fumbled`;
-    } else if (rehCount > 0) {
-      countBadge.textContent = `${rehCount} ${rehCount === 1 ? 'fumble' : 'fumbles'}`;
-    } else {
-      countBadge.textContent = `${diffCount} ${diffCount === 1 ? 'word' : 'words'}`;
-    }
-  }
-
-  function saveRehearsalWords() {
-    rehearsalWordsSet = new Set(
-      rehearsalWordsList.map((item) => (typeof item === 'string' ? item : item.clean || item.word).toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '')).filter(Boolean)
-    );
-    if (configStore) {
-      configStore.set('script.rehearsal_words', rehearsalWordsList);
-    }
-    localStorage.setItem('teleprompter_rehearsal_words', JSON.stringify(rehearsalWordsList));
-    updateCuesCountBadge();
-  }
-
-  function renderRehearsalTags() {
-    const tagsList = document.getElementById('rehearsal-tags-list');
-    const wordsCount = document.getElementById('rehearsal-words-count');
-    if (wordsCount) wordsCount.textContent = String(rehearsalWordsList.length);
-    updateCuesCountBadge();
-
-    // Compute counts by tag type
-    const counts = { all: rehearsalWordsList.length, skipped: 0, stumbled: 0, repeated: 0 };
-    rehearsalWordsList.forEach((item) => {
-      const r = (typeof item === 'object' && item.reason ? item.reason : 'stumbled').toLowerCase();
-      if (counts[r] !== undefined) counts[r]++;
-      else counts.stumbled++;
-    });
-
-    const countAll = document.getElementById('filter-count-all');
-    const countSkipped = document.getElementById('filter-count-skipped');
-    const countStumbled = document.getElementById('filter-count-stumbled');
-    const countRepeated = document.getElementById('filter-count-repeated');
-    if (countAll) countAll.textContent = String(counts.all);
-    if (countSkipped) countSkipped.textContent = String(counts.skipped);
-    if (countStumbled) countStumbled.textContent = String(counts.stumbled);
-    if (countRepeated) countRepeated.textContent = String(counts.repeated);
-
-    // Update active filter button state
-    document.querySelectorAll('#rehearsal-filter-group .rehearsal-filter-btn').forEach((btn) => {
-      if (btn.getAttribute('data-filter') === rehearsalFilter) {
-        btn.classList.add('active');
-      } else {
-        btn.classList.remove('active');
+  // ---- Rehearsal Cues & Vocabulary Subsystem (static/cues.js) ---------------
+  const cues = new TeleprompterCues.RehearsalCues({
+    configStore: configStore,
+    storage: typeof localStorage !== 'undefined' ? localStorage : null,
+    onChange: () => {
+      updateCuesUI();
+      if (allWords && allWords.length > 0) {
+        parseAndRenderTranscript();
       }
-    });
+    },
+  });
 
-    // Update clear button text and state
-    const btnClearRehearsalWords = document.getElementById('btn-clear-rehearsal-words');
-    if (btnClearRehearsalWords) {
-      if (rehearsalFilter === 'all') {
-        btnClearRehearsalWords.textContent = 'Clear rehearsal fumbles';
-        btnClearRehearsalWords.disabled = rehearsalWordsList.length === 0;
-      } else {
-        const matchCount = counts[rehearsalFilter] || 0;
-        btnClearRehearsalWords.textContent = `Clear ${rehearsalFilter} (${matchCount})`;
-        btnClearRehearsalWords.disabled = matchCount === 0;
-      }
-    }
-
-    if (!tagsList) return;
-    if (rehearsalWordsList.length === 0) {
-      tagsList.innerHTML = '<span class="text-gray-500 italic text-[11px]">No trial fumbles detected yet. Run "Rehearse" to trial-test your script.</span>';
-      return;
-    }
-
-    const indexedList = rehearsalWordsList.map((item, originalIdx) => ({ item, originalIdx }));
-    const filtered = rehearsalFilter === 'all'
-      ? indexedList
-      : indexedList.filter(({ item }) => {
-          const r = (typeof item === 'object' && item.reason ? item.reason : 'stumbled').toLowerCase();
-          return r === rehearsalFilter;
-        });
-
-    if (filtered.length === 0) {
-      tagsList.innerHTML = `<span class="text-gray-500 italic text-[11px]">No ${escapeHtml(rehearsalFilter)} fumbles found.</span>`;
-      return;
-    }
-
-    tagsList.innerHTML = filtered.map(({ item, originalIdx }) => {
-      const word = typeof item === 'string' ? item : (item.word || item.clean);
-      const reason = typeof item === 'object' && item.reason ? item.reason : 'stumbled';
-      const reasonLabel = reason === 'skipped' ? 'Skipped' : reason === 'repeated' ? 'Repeated' : 'Stumbled';
-      const badgeClass = `rehearsal-badge rehearsal-badge-${reason === 'repeated' ? 'repeated' : reason === 'skipped' ? 'skipped' : 'stumbled'}`;
-      return `
-        <span class="rehearsal-tag-chip">
-          <span>${escapeHtml(word)}</span>
-          <span class="${badgeClass}">${reasonLabel}</span>
-          <button type="button" class="keep-btn" data-idx="${originalIdx}" title="Keep permanently as difficult word">+ Keep</button>
-          <button type="button" class="remove-btn" data-idx="${originalIdx}" title="Remove this specific fumble">×</button>
-        </span>
-      `;
-    }).join('');
-  }
-
-  function hexToRgba(hex, alpha) {
-    let c = hex.replace('#', '');
-    if (c.length === 3) c = c.split('').map((x) => x + x).join('');
-    const num = parseInt(c, 16);
-    if (isNaN(num)) return `rgba(245, 158, 11, ${alpha})`;
-    const r = (num >> 16) & 255;
-    const g = (num >> 8) & 255;
-    const b = num & 255;
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-  }
-
-  function applyDifficultColorStyles() {
-    document.documentElement.style.setProperty('--difficult-color', difficultColor);
-    document.documentElement.style.setProperty('--difficult-bg', hexToRgba(difficultColor, 0.22));
-    document.documentElement.style.setProperty('--difficult-border', hexToRgba(difficultColor, 0.55));
-
-    const previewEl = document.getElementById('difficult-word-preview');
-    if (previewEl) {
-      previewEl.className = `prompter-word prompter-word-difficult style-${difficultStyle}`;
-    }
-
-    const swatches = document.querySelectorAll('.color-swatch');
-    swatches.forEach((sw) => {
-      const col = sw.getAttribute('data-color');
-      if (col && col.toLowerCase() === difficultColor.toLowerCase()) {
-        sw.classList.add('active-swatch');
-      } else {
-        sw.classList.remove('active-swatch');
-      }
-    });
-
-    const picker = document.getElementById('picker-difficult-color');
-    if (picker && picker.value.toLowerCase() !== difficultColor.toLowerCase()) {
-      picker.value = difficultColor;
-    }
-
-    const radios = document.querySelectorAll('input[name="difficult-style"]');
-    radios.forEach((r) => {
-      if (r.value === difficultStyle) r.checked = true;
-    });
-
-    updateCuesCountBadge();
-  }
-
-  function saveDifficultWords() {
-    difficultWordsSet = new Set(
-      difficultWordsList.map((w) => w.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '')).filter(Boolean)
-    );
-    if (configStore) {
-      configStore.update('ui', {
-        difficult_words: difficultWordsList,
-        difficult_color: difficultColor,
-        difficult_style: difficultStyle
-      });
-    }
-    localStorage.setItem('teleprompter_difficult_words', JSON.stringify(difficultWordsList));
-    localStorage.setItem('teleprompter_difficult_color', difficultColor);
-    localStorage.setItem('teleprompter_difficult_style', difficultStyle);
-    updateCuesCountBadge();
-  }
-
-  function showModalStatus(msg = 'Saved & Applied ✓') {
-    const statusEl = document.getElementById('difficult-modal-status');
-    if (!statusEl) return;
-    statusEl.textContent = msg;
-    statusEl.classList.remove('opacity-0');
-    statusEl.classList.add('opacity-100');
-    setTimeout(() => {
-      statusEl.classList.remove('opacity-100');
-      statusEl.classList.add('opacity-0');
-    }, 1800);
-  }
-
-  function renderDifficultTags() {
-    const tagsList = document.getElementById('difficult-tags-list');
-    const wordsCount = document.getElementById('difficult-words-count');
-    if (wordsCount) wordsCount.textContent = String(difficultWordsList.length);
-    updateCuesCountBadge();
-
-    if (!tagsList) return;
-    if (difficultWordsList.length === 0) {
-      tagsList.innerHTML = '<span class="text-gray-500 italic text-[11px]">No difficult words added yet. Type a word above.</span>';
-      return;
-    }
-
-    tagsList.innerHTML = difficultWordsList.map((word, idx) => `
-      <span class="difficult-tag-chip">
-        <span>${escapeHtml(word)}</span>
-        <button type="button" class="remove-btn" data-idx="${idx}" title="Remove word">×</button>
-      </span>
-    `).join('');
-  }
-
-  function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-  }
-
-  function addDifficultWord(rawWord) {
-    if (!rawWord || !rawWord.trim()) return;
-    const parts = rawWord.split(/[,;\n\r\t]+/).map((s) => s.trim()).filter(Boolean);
-    let added = false;
-    for (const p of parts) {
-      const cleaned = p.replace(/^[^\w]+|[^\w]+$/g, '');
-      if (!cleaned) continue;
-      const lower = cleaned.toLowerCase();
-      if (!difficultWordsList.some((w) => w.toLowerCase() === lower)) {
-        difficultWordsList.push(cleaned);
-        added = true;
-      }
-    }
-    if (added) {
-      saveDifficultWords();
-      renderDifficultTags();
-      parseAndRenderTranscript();
-      showModalStatus('Word added ✓');
-    }
-  }
-
-  // Difficult Words Modal Elements & Events
+  const diffCountBadge = document.getElementById('difficult-count-badge');
   const modalDifficultWords = document.getElementById('modal-difficult-words');
   const btnOpenDifficultWords = document.getElementById('btn-open-difficult-words');
   const btnCloseDifficultWords = document.getElementById('btn-close-difficult-words');
@@ -537,12 +281,59 @@
   const btnImportBatchWords = document.getElementById('btn-import-batch-words');
   const pickerDifficultColor = document.getElementById('picker-difficult-color');
   const colorSwatchesContainer = document.getElementById('color-swatches-container');
+  const btnClearRehearsalWords = document.getElementById('btn-clear-rehearsal-words');
+  const rehearsalFilterGroup = document.getElementById('rehearsal-filter-group');
+  const checkboxFilterPrompter = document.getElementById('checkbox-filter-prompter');
+  const difficultTagsList = document.getElementById('difficult-tags-list');
+  const rehearsalTagsList = document.getElementById('rehearsal-tags-list');
+  const difficultWordsCount = document.getElementById('difficult-words-count');
+  const rehearsalWordsCount = document.getElementById('rehearsal-words-count');
+  const difficultPreviewEl = document.getElementById('difficult-word-preview');
+  const difficultStyleRadios = document.querySelectorAll('input[name="difficult-style"]');
+
+  const filterCounts = {
+    all: document.getElementById('filter-count-all'),
+    skipped: document.getElementById('filter-count-skipped'),
+    stumbled: document.getElementById('filter-count-stumbled'),
+    repeated: document.getElementById('filter-count-repeated'),
+  };
+
+  function showModalStatus(msg = 'Saved & Applied ✓') {
+    const statusEl = document.getElementById('difficult-modal-status');
+    if (!statusEl) return;
+    statusEl.textContent = msg;
+    statusEl.classList.remove('opacity-0');
+    statusEl.classList.add('opacity-100');
+    setTimeout(() => {
+      statusEl.classList.remove('opacity-100');
+      statusEl.classList.add('opacity-0');
+    }, 1800);
+  }
+
+  function applyDifficultColorStyles() {
+    cues.applyColorStyles(difficultPreviewEl, colorSwatchesContainer, pickerDifficultColor, difficultStyleRadios);
+    cues.updateCountBadge(diffCountBadge);
+  }
+
+  function renderDifficultTags() {
+    cues.renderDifficultTags(difficultTagsList, difficultWordsCount);
+    cues.updateCountBadge(diffCountBadge);
+  }
+
+  function renderRehearsalTags() {
+    cues.renderRehearsalTags(rehearsalTagsList, rehearsalWordsCount, filterCounts, rehearsalFilterGroup, btnClearRehearsalWords);
+    cues.updateCountBadge(diffCountBadge);
+  }
+
+  function updateCuesUI() {
+    applyDifficultColorStyles();
+    renderDifficultTags();
+    renderRehearsalTags();
+  }
 
   function openDifficultWordsModal() {
     if (!modalDifficultWords) return;
-    renderDifficultTags();
-    renderRehearsalTags();
-    applyDifficultColorStyles();
+    updateCuesUI();
     modalDifficultWords.classList.remove('hidden');
     if (inputDifficultWord) {
       setTimeout(() => inputDifficultWord.focus(), 50);
@@ -566,7 +357,7 @@
   if (btnSaveDifficultWords) {
     btnSaveDifficultWords.addEventListener('click', () => {
       if (inputDifficultWord && inputDifficultWord.value.trim()) {
-        addDifficultWord(inputDifficultWord.value.trim());
+        cues.addDifficultWord(inputDifficultWord.value.trim());
         inputDifficultWord.value = '';
       }
       closeDifficultWordsModal();
@@ -587,14 +378,18 @@
 
   if (btnAddDifficultWord && inputDifficultWord) {
     btnAddDifficultWord.addEventListener('click', () => {
-      addDifficultWord(inputDifficultWord.value.trim());
+      if (cues.addDifficultWord(inputDifficultWord.value.trim())) {
+        showModalStatus('Word added ✓');
+      }
       inputDifficultWord.value = '';
       inputDifficultWord.focus();
     });
     inputDifficultWord.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        addDifficultWord(inputDifficultWord.value.trim());
+        if (cues.addDifficultWord(inputDifficultWord.value.trim())) {
+          showModalStatus('Word added ✓');
+        }
         inputDifficultWord.value = '';
       }
     });
@@ -611,7 +406,9 @@
 
   if (btnImportBatchWords && textareaBatchWords) {
     btnImportBatchWords.addEventListener('click', () => {
-      addDifficultWord(textareaBatchWords.value);
+      if (cues.addDifficultWord(textareaBatchWords.value)) {
+        showModalStatus('Batch words imported ✓');
+      }
       textareaBatchWords.value = '';
       batchWordsContainer.classList.add('hidden');
     });
@@ -619,93 +416,64 @@
 
   if (btnClearDifficultWords) {
     btnClearDifficultWords.addEventListener('click', () => {
-      if (difficultWordsList.length === 0) return;
-      difficultWordsList = [];
-      saveDifficultWords();
-      renderDifficultTags();
-      parseAndRenderTranscript();
+      if (cues.difficultWordsList.length === 0) return;
+      cues.clearDifficultWords();
       showModalStatus('Cleared all words');
     });
   }
 
-  const btnClearRehearsalWords = document.getElementById('btn-clear-rehearsal-words');
   if (btnClearRehearsalWords) {
     btnClearRehearsalWords.addEventListener('click', () => {
-      if (rehearsalWordsList.length === 0) return;
-      if (rehearsalFilter === 'all') {
-        rehearsalWordsList = [];
-        showModalStatus('Cleared rehearsal fumbles ✓');
-      } else {
-        const initialCount = rehearsalWordsList.length;
-        rehearsalWordsList = rehearsalWordsList.filter((item) => {
-          const r = (typeof item === 'object' && item.reason ? item.reason : 'stumbled').toLowerCase();
-          return r !== rehearsalFilter;
-        });
-        const removed = initialCount - rehearsalWordsList.length;
-        if (removed === 0) return;
-        showModalStatus(`Cleared ${removed} ${rehearsalFilter} fumble${removed === 1 ? '' : 's'} ✓`);
-      }
-      saveRehearsalWords();
-      renderRehearsalTags();
-      parseAndRenderTranscript();
-    });
-  }
-
-  const rehearsalFilterGroup = document.getElementById('rehearsal-filter-group');
-  if (rehearsalFilterGroup) {
-    rehearsalFilterGroup.addEventListener('click', (e) => {
-      const btn = e.target.closest('.rehearsal-filter-btn');
-      if (!btn) return;
-      const filter = btn.getAttribute('data-filter');
-      if (filter && filter !== rehearsalFilter) {
-        rehearsalFilter = filter;
-        renderRehearsalTags();
-        if (syncPrompterWithFilter) {
-          parseAndRenderTranscript();
+      if (cues.rehearsalWordsList.length === 0) return;
+      const filter = cues.rehearsalFilter;
+      const removed = cues.clearRehearsalWords(filter);
+      if (removed > 0) {
+        if (filter === 'all') {
+          showModalStatus('Cleared rehearsal fumbles ✓');
+        } else {
+          showModalStatus(`Cleared ${removed} ${filter} fumble${removed === 1 ? '' : 's'} ✓`);
         }
       }
     });
   }
 
-  const checkboxFilterPrompter = document.getElementById('checkbox-filter-prompter');
-  if (checkboxFilterPrompter) {
-    checkboxFilterPrompter.checked = syncPrompterWithFilter;
-    checkboxFilterPrompter.addEventListener('change', (e) => {
-      syncPrompterWithFilter = e.target.checked;
-      if (configStore) configStore.set('ui.sync_fumble_filter', syncPrompterWithFilter);
-      try {
-        localStorage.setItem('teleprompter_sync_fumble_filter', String(syncPrompterWithFilter));
-      } catch (_) {}
-      parseAndRenderTranscript();
+  if (rehearsalFilterGroup) {
+    rehearsalFilterGroup.addEventListener('click', (e) => {
+      const btn = e.target.closest('.rehearsal-filter-btn');
+      if (!btn) return;
+      const filter = btn.getAttribute('data-filter');
+      if (filter) {
+        cues.setFilter(filter);
+        renderRehearsalTags();
+      }
     });
   }
 
-  const difficultTagsList = document.getElementById('difficult-tags-list');
+  if (checkboxFilterPrompter) {
+    checkboxFilterPrompter.checked = cues.syncPrompterWithFilter;
+    checkboxFilterPrompter.addEventListener('change', (e) => {
+      cues.setSyncPrompterWithFilter(e.target.checked);
+    });
+  }
+
   if (difficultTagsList) {
     difficultTagsList.addEventListener('click', (e) => {
       const btn = e.target.closest('.remove-btn');
       if (!btn) return;
       const idx = parseInt(btn.getAttribute('data-idx'), 10);
-      if (!isNaN(idx) && idx >= 0 && idx < difficultWordsList.length) {
-        difficultWordsList.splice(idx, 1);
-        saveDifficultWords();
-        renderDifficultTags();
-        parseAndRenderTranscript();
+      if (!isNaN(idx)) {
+        cues.removeDifficultWord(idx);
       }
     });
   }
 
-  const rehearsalTagsList = document.getElementById('rehearsal-tags-list');
   if (rehearsalTagsList) {
     rehearsalTagsList.addEventListener('click', (e) => {
       const removeBtn = e.target.closest('.remove-btn');
       if (removeBtn) {
         const idx = parseInt(removeBtn.getAttribute('data-idx'), 10);
-        if (!isNaN(idx) && idx >= 0 && idx < rehearsalWordsList.length) {
-          rehearsalWordsList.splice(idx, 1);
-          saveRehearsalWords();
-          renderRehearsalTags();
-          parseAndRenderTranscript();
+        if (!isNaN(idx)) {
+          cues.removeRehearsalWord(idx);
           showModalStatus('Fumbled word removed ✓');
         }
         return;
@@ -713,13 +481,8 @@
       const keepBtn = e.target.closest('.keep-btn');
       if (keepBtn) {
         const idx = parseInt(keepBtn.getAttribute('data-idx'), 10);
-        if (!isNaN(idx) && idx >= 0 && idx < rehearsalWordsList.length) {
-          const item = rehearsalWordsList[idx];
-          const word = typeof item === 'string' ? item : (item.word || item.clean);
-          addDifficultWord(word);
-          rehearsalWordsList.splice(idx, 1);
-          saveRehearsalWords();
-          renderRehearsalTags();
+        if (!isNaN(idx)) {
+          cues.promoteToDifficult(idx);
           showModalStatus('Saved to Configured Difficult Words ✓');
         }
       }
@@ -732,10 +495,7 @@
       if (!swatch) return;
       const col = swatch.getAttribute('data-color');
       if (col) {
-        difficultColor = col;
-        saveDifficultWords();
-        applyDifficultColorStyles();
-        parseAndRenderTranscript();
+        cues.setColor(col);
         showModalStatus('Color updated ✓');
       }
     });
@@ -743,19 +503,13 @@
 
   if (pickerDifficultColor) {
     pickerDifficultColor.addEventListener('input', (e) => {
-      difficultColor = e.target.value;
-      saveDifficultWords();
-      applyDifficultColorStyles();
-      parseAndRenderTranscript();
+      cues.setColor(e.target.value);
     });
   }
 
-  document.querySelectorAll('input[name="difficult-style"]').forEach((radio) => {
+  difficultStyleRadios.forEach((radio) => {
     radio.addEventListener('change', (e) => {
-      difficultStyle = e.target.value;
-      saveDifficultWords();
-      applyDifficultColorStyles();
-      parseAndRenderTranscript();
+      cues.setStyle(e.target.value);
       showModalStatus('Style updated ✓');
     });
   });
@@ -1079,31 +833,16 @@
 
   function onFumble(msg) {
     const incoming = Array.isArray(msg.fumbles) ? msg.fumbles : (msg.fumble ? [msg.fumble] : []);
-    let added = false;
-    incoming.forEach((f) => {
-      if (!f || !f.clean) return;
-      const clean = f.clean.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
-      if (!clean) return;
-      if (!rehearsalWordsSet.has(clean)) {
-        rehearsalWordsList.push({
-          word: f.word || clean,
-          clean: clean,
-          reason: f.reason || 'stumbled',
-        });
-        rehearsalWordsSet.add(clean);
-        added = true;
-      }
+    cues.recordFumbles(incoming, (f) => {
       const wordEl = document.getElementById(`w-${f.index}`);
       if (wordEl) {
-        const reason = f.reason || 'stumbled';
-        wordEl.classList.add('prompter-word-difficult', `style-${difficultStyle}`, 'prompter-word-rehearsal', `prompter-word-rehearsal-${reason}`);
+        const cue = cues.getCue(f.word || f.clean);
+        if (cue.classes) {
+          wordEl.className = `prompter-word ${cue.classes}`;
+        }
       }
     });
-
-    if (added) {
-      saveRehearsalWords();
-      renderRehearsalTags();
-    }
+    renderRehearsalTags();
   }
 
   function onRehearsalSummary(msg) {
@@ -1307,20 +1046,26 @@
     document.getElementById('val-opacity').textContent = `${Math.round(e.target.value * 100)}%`;
   });
 
+  // ---- PrompterViewport Display Engine (static/viewport.js) ----------------
+  const viewport = new TeleprompterViewport.PrompterViewport({
+    linesContainer: linesContainer,
+    scrollingContent: scrollingContent,
+    viewingWindow: viewingWindow,
+    cursorBar: cursorBar,
+    initialFontSize: optFontsize ? parseInt(optFontsize.value, 10) || 25 : 25,
+    activeLineOffset: 1,
+  });
+
   function getLineHeightForFontSize(fontSize) {
-    return Math.max(36, Math.round(fontSize * 1.8));
+    return TeleprompterViewport.getLineHeightForFontSize(fontSize);
   }
 
-  let currentLineHeight = getLineHeightForFontSize(optFontsize ? parseInt(optFontsize.value, 10) || 25 : 25);
+  let currentLineHeight = viewport.lineHeight;
 
   optFontsize.addEventListener('input', (e) => {
     const newSize = parseInt(e.target.value, 10);
-    linesContainer.style.fontSize = `${newSize}px`;
     document.getElementById('val-fontsize').textContent = `${newSize}px`;
-    currentLineHeight = getLineHeightForFontSize(newSize);
-    updateViewportLines(parseInt(optLines.value, 10));
-    const translateY = -(currentLineIndex * currentLineHeight);
-    scrollingContent.style.transform = `translateY(${translateY}px)`;
+    currentLineHeight = viewport.setFontSize(newSize, parseInt(optLines.value, 10));
   });
 
   if (optBoxWidth) {
@@ -1349,17 +1094,11 @@
   optLines.addEventListener('input', (e) => {
     const numLines = parseInt(e.target.value, 10);
     valLines.textContent = numLines;
-    updateViewportLines(numLines);
+    viewport.updateViewportLines(numLines);
   });
 
   function updateViewportLines(numLines) {
-    const activeLineOffset = 1; // Exactly 1 line above the active line (2nd line)
-    const lineH = currentLineHeight;
-    document.documentElement.style.setProperty('--prompter-line-height', `${lineH}px`);
-    viewingWindow.style.height = (numLines * lineH) + 'px';
-    cursorBar.style.top = (activeLineOffset * lineH) + 'px';
-    cursorBar.style.height = lineH + 'px';
-    scrollingContent.style.paddingTop = (activeLineOffset * lineH) + 'px';
+    viewport.updateViewportLines(numLines);
   }
 
   // ---- Automatic Teleprompter Script Phrasing & Formatting -----------------
@@ -1481,57 +1220,21 @@
       allWords = [];
       parsedSections = [];
     }
-    // Rebuild SectionTimeline whenever parsedSections is repopulated (C1)
-    sectionTimeline = new SectionTimeline(parsedSections, () => (Date.now() - sessionStartTime) / 1000);
+    // Rebuild SectionTimeline whenever parsedSections is repopulated
+    sectionTimeline = new TeleprompterTimeline.SectionTimeline(
+      parsedSections,
+      () => (Date.now() - sessionStartTime) / 1000,
+      { onActiveSectionChange: updateRetakeButtonLabel }
+    );
 
     if (linesData.length === 0 || allWords.length === 0) {
-      linesContainer.innerHTML = `<p class="prompter-line text-gray-400 italic">Paste script & press Start Session...</p>`;
+      viewport.renderScript([]);
       currentWordIndex = 0;
       currentLineIndex = 0;
       return;
     }
 
-    const rehearsalReasonMap = new Map();
-    rehearsalWordsList.forEach((item) => {
-      const clean = (typeof item === 'string' ? item : item.clean || item.word).toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
-      if (clean && !rehearsalReasonMap.has(clean)) {
-        const r = typeof item === 'object' && item.reason ? item.reason.toLowerCase() : 'stumbled';
-        rehearsalReasonMap.set(clean, r);
-      }
-    });
-
-    linesContainer.innerHTML = linesData.map((line) => {
-      if (line.isSectionHeader) {
-        return `<div id="line-${line.lineIdx}" class="prompter-line prompter-line-section select-none"><span class="prompter-section-pill">[${line.sectionTitle}]</span></div>`;
-      }
-      if (line.isBlank) {
-        return `<div id="line-${line.lineIdx}" class="prompter-line prompter-line-blank select-none"><span class="inline-block w-8 h-[2px] bg-indigo-400/50 rounded-full"></span></div>`;
-      }
-      const wordsHTML = line.words
-        .map((w) => {
-          const clean = w.original.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, '');
-          const isDifficult = clean && difficultWordsSet.has(clean);
-          const rehearsalReason = clean ? rehearsalReasonMap.get(clean) : null;
-          let isRehearsal = false;
-          if (rehearsalReason) {
-            if (syncPrompterWithFilter && rehearsalFilter !== 'all') {
-              isRehearsal = (rehearsalReason === rehearsalFilter);
-            } else {
-              isRehearsal = true;
-            }
-          }
-          let extraClasses = '';
-          if (isDifficult) {
-            extraClasses = ` prompter-word-difficult style-${difficultStyle}`;
-          } else if (isRehearsal) {
-            extraClasses = ` prompter-word-difficult style-${difficultStyle} prompter-word-rehearsal prompter-word-rehearsal-${rehearsalReason}`;
-          }
-          return `<span id="w-${w.globalIdx}" class="prompter-word${extraClasses}">${w.original}</span>`;
-        })
-        .join(' ');
-      return `<div id="line-${line.lineIdx}" class="prompter-line line-upcoming">${wordsHTML}</div>`;
-    }).join('');
-
+    viewport.renderScript(linesData, cues);
     currentWordIndex = 0;
     currentLineIndex = 0;
     updateHighlighting(0);
@@ -1544,120 +1247,29 @@
   function updateHighlighting(wordIndex) {
     if (!allWords.length) return;
 
-    const oldWord = linesContainer.querySelector('.word-active');
-    if (oldWord) oldWord.classList.remove('word-active');
-
-    const activeWordObj = allWords[wordIndex];
-    if (!activeWordObj) return;
+    const res = viewport.highlightWord(wordIndex, allWords);
+    if (!res || !res.activeWordObj) return;
 
     currentWordIndex = wordIndex;
-    currentLineIndex = activeWordObj.lineIdx;
+    currentLineIndex = res.lineIdx;
 
-    if (parsedSections.length > 0 && activeWordObj.sectionId) {
-      handleSectionWordProgress(activeWordObj);
+    if (parsedSections.length > 0 && res.activeWordObj.sectionId) {
+      handleSectionWordProgress(res.activeWordObj);
     }
-
-    const wordSpan = document.getElementById(`w-${wordIndex}`);
-    if (wordSpan) wordSpan.classList.add('word-active');
-
-    const allLineDivs = linesContainer.querySelectorAll('.prompter-line');
-    allLineDivs.forEach((lineEl, idx) => {
-      if (idx === currentLineIndex) {
-        lineEl.classList.remove('line-upcoming', 'line-past');
-        lineEl.classList.add('line-active');
-      } else if (idx > currentLineIndex) {
-        lineEl.classList.remove('line-active', 'line-past');
-        lineEl.classList.add('line-upcoming');
-      } else {
-        lineEl.classList.remove('line-active', 'line-upcoming');
-        lineEl.classList.add('line-past');
-      }
-    });
-
-    const translateY = -(currentLineIndex * currentLineHeight);
-    scrollingContent.style.transform = `translateY(${translateY}px)`;
   }
 
-  // ---- SectionTimeline (C1) -------------------------------------------------
-  // Owns all startSec / endSec mutation behind a 4-method interface.
-  // Callers never touch parsedSections timestamps directly.
-  class SectionTimeline {
-    constructor(sections, getElapsedSec) {
-      // sections[] is the shared parsedSections array (plain objects).
-      // Mutation is concentrated here; all other code reads via getSectionMarkers().
-      this._sections = sections;
-      this._getElapsedSec = getElapsedSec; // () => seconds since session start
-      this._activeId = null;
+  // ---- Section Timeline & Retake (static/timeline.js) -----------------------
+  function updateRetakeButtonLabel(cur) {
+    if (btnRetakeText && cur) {
+      btnRetakeText.textContent = `Re-take [${cur.title}]`;
     }
-
-    // Called on every word highlight when sections are active.
-    wordSeen(word, isSessionActive) {
-      const secId = word.sectionId;
-      if (!secId) return;
-      const nowSec = this._getElapsedSec();
-
-      if (secId !== this._activeId) {
-        // Close the previously active section (if any).
-        if (this._activeId && isSessionActive) {
-          const prev = this._sections.find((s) => s.id === this._activeId);
-          if (prev && prev.startSec !== null && prev.endSec === null) {
-            prev.endSec = nowSec;
-          }
-        }
-        this._activeId = secId;
-        // Open the newly active section.
-        const cur = this._sections.find((s) => s.id === secId);
-        if (cur && isSessionActive && cur.startSec === null) {
-          cur.startSec = Math.max(0, nowSec - 0.1);
-        }
-        if (btnRetakeText && cur) {
-          btnRetakeText.textContent = `Re-take [${cur.title}]`;
-        }
-      } else if (isSessionActive) {
-        // Same section — ensure startSec is set if it somehow isn't yet.
-        const cur = this._sections.find((s) => s.id === secId);
-        if (cur && cur.startSec === null) {
-          cur.startSec = Math.max(0, nowSec - 0.1);
-        }
-      }
-    }
-
-    // Resets timestamps for the current (or first) section and returns its startIndex for seek.
-    retake() {
-      const target = this._sections.find((s) => s.id === this._activeId) || this._sections[0];
-      if (!target || target.startIndex === null) return null;
-      target.startSec = null;
-      target.endSec = null;
-      return { seekIndex: target.startIndex, title: target.title };
-    }
-
-    // Closes the currently active section at the given elapsed second.
-    close(nowSec) {
-      if (!this._activeId) return;
-      const sec = this._sections.find((s) => s.id === this._activeId);
-      if (sec && sec.startSec !== null && sec.endSec === null) {
-        sec.endSec = nowSec;
-      }
-      this._activeId = null;
-    }
-
-    // Returns the sections array (used by stopRecording and external readers).
-    getSectionMarkers() {
-      return this._sections;
-    }
-
-    // Resets all timestamps on all sections (called at session start).
-    reset(activeId) {
-      this._sections.forEach((s) => { s.startSec = null; s.endSec = null; });
-      this._activeId = activeId || null;
-    }
-
-    get activeId() { return this._activeId; }
-    set activeId(id) { this._activeId = id; }
   }
 
-  // sectionTimeline is initialized when parsedSections is populated.
-  let sectionTimeline = new SectionTimeline(parsedSections, () => (Date.now() - sessionStartTime) / 1000);
+  let sectionTimeline = new TeleprompterTimeline.SectionTimeline(
+    parsedSections,
+    () => (Date.now() - sessionStartTime) / 1000,
+    { onActiveSectionChange: updateRetakeButtonLabel }
+  );
 
   // ---- Thin adapters (preserve external call sites unchanged) ---------------
   function handleSectionWordProgress(targetWord) {
@@ -1815,88 +1427,110 @@
     }
   });
 
+  let isStopping = false;
+
   btnStop.addEventListener('click', () => {
+    if (isStopping || !isPrompting) {
+      return;
+    }
+    isStopping = true;
     console.log('[DEBUG STOP] clicked. activeRecordMode:', activeRecordMode, 'mediaRecorder:', mediaSession.mediaRecorder ? mediaSession.mediaRecorder.state : 'null');
-    isPrompting = false;
+
+    // Immediate visual feedback so the user knows Stop has registered
+    btnStop.disabled = true;
+    setBadge(vadStatus, 'FINALIZING…', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
+    speechHud.textContent = 'Finalizing takes and speech alignment…';
+
+    // Stop streaming new audio frames from the browser mic immediately so no trailing silence/noise is sent
     stopBrowserAudioStream();
-    if (optRecordMode) optRecordMode.disabled = false;
-    if (optRecordFormat) optRecordFormat.disabled = false;
 
     if (btnRetake) {
       btnRetake.classList.add('hidden');
       btnRetake.classList.remove('flex');
     }
 
-    const sessionEndTime = Date.now();
-    const totalSessionSec = (sessionEndTime - sessionStartTime) / 1000;
-    // Close the active section via SectionTimeline (C1)
-    sectionTimeline.close(totalSessionSec);
-    currentActiveSectionId = null;
+    // Brief flush window (500ms): allow in-flight Whisper recognition results
+    // and sync messages to update active section transitions before sealing boundaries.
+    const FLUSH_DELAY_MS = 500;
+    setTimeout(() => {
+      isPrompting = false;
+      isStopping = false;
+      btnStop.disabled = false;
 
-    send({ type: 'stop' });
+      if (optRecordMode) optRecordMode.disabled = false;
+      if (optRecordFormat) optRecordFormat.disabled = false;
 
-    if (activeRecordMode !== 'off' && mediaSession.mediaRecorder && mediaSession.mediaRecorder.state !== 'inactive') {
-      console.log('[DEBUG STOP] Calling mediaSession.stopRecording...');
-      mediaSession.stopRecording({
-        sections: sectionTimeline.getSectionMarkers(),
-        sessionDurationSec: totalSessionSec,
-        onProgress: (msg) => {
-          console.log('[DEBUG STOP] Progress:', msg);
-          setBadge(vadStatus, 'ENCODING…', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
-          speechHud.textContent = msg;
-        }
-      }).then(async (result) => {
-        console.log('[DEBUG STOP] stopRecording resolved with:', result);
-        if (!result) return;
-        const { blob, extension, filename, takes } = result;
+      const sessionEndTime = Date.now();
+      const totalSessionSec = (sessionEndTime - sessionStartTime) / 1000;
+      // Close the active section via SectionTimeline (C1)
+      sectionTimeline.close(totalSessionSec);
+      currentActiveSectionId = null;
 
-        if (!blob || blob.size === 0) {
-          setBadge(vadStatus, 'STOPPED', 'bg-gray-800 text-gray-400 border-gray-700');
-          speechHud.textContent = 'Recording ended (no audio/video frames captured). Check microphone & camera permissions in Brave.';
-          return;
-        }
+      send({ type: 'stop' });
 
-        const effectiveMode = (activeRecordMode === 'audio' || !mediaSession.hasRecordedVideoTrack) ? 'audio' : 'video';
-        const exportTakes = (takes && takes.length > 0) ? takes : [
-          {
-            filename: filename,
-            title: effectiveMode === 'audio' ? 'Master Session Audio' : 'Master Session Video',
-            duration: totalSessionSec,
-            blob: blob,
-            isMaster: true
+      if (activeRecordMode !== 'off' && mediaSession.mediaRecorder && mediaSession.mediaRecorder.state !== 'inactive') {
+        console.log('[DEBUG STOP] Calling mediaSession.stopRecording...');
+        mediaSession.stopRecording({
+          sections: sectionTimeline.getSectionMarkers(),
+          sessionDurationSec: totalSessionSec,
+          onProgress: (msg) => {
+            console.log('[DEBUG STOP] Progress:', msg);
+            setBadge(vadStatus, 'ENCODING…', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
+            speechHud.textContent = msg;
           }
-        ];
+        }).then(async (result) => {
+          console.log('[DEBUG STOP] stopRecording resolved with:', result);
+          if (!result) return;
+          const { blob, extension, filename, takes } = result;
 
-        setBadge(vadStatus, 'READY TO EXPORT', 'bg-indigo-950 text-indigo-400 border-indigo-500/30');
-        speechHud.textContent = 'Recording stopped. Choose your export options below.';
+          if (!blob || blob.size === 0) {
+            setBadge(vadStatus, 'STOPPED', 'bg-gray-800 text-gray-400 border-gray-700');
+            speechHud.textContent = 'Recording ended (no audio/video frames captured). Check microphone & camera permissions in Brave.';
+            return;
+          }
 
-        // Present export modal with all takes and master file
-        openExportModal(exportTakes, effectiveMode, extension);
-      }).catch((err) => {
-        console.error('Error saving recording:', err);
-        setBadge(vadStatus, 'ERROR', 'bg-red-950 text-red-400 border-red-500/30');
-        speechHud.textContent = '⚠ Error saving recording: ' + (err && err.message ? err.message : String(err));
-      });
-    } else {
-      if (isRehearsal) {
-        setBadge(vadStatus, 'REHEARSAL COMPLETE', 'bg-emerald-950 text-emerald-400 border-emerald-500/30');
-        const count = rehearsalWordsList.length;
-        speechHud.textContent = `Trial complete! ${count} fumbled ${count === 1 ? 'word' : 'words'} highlighted for your live take.`;
+          const effectiveMode = (activeRecordMode === 'audio' || !mediaSession.hasRecordedVideoTrack) ? 'audio' : 'video';
+          const exportTakes = (takes && takes.length > 0) ? takes : [
+            {
+              filename: filename,
+              title: effectiveMode === 'audio' ? 'Master Session Audio' : 'Master Session Video',
+              duration: totalSessionSec,
+              blob: blob,
+              isMaster: true
+            }
+          ];
+
+          setBadge(vadStatus, 'READY TO EXPORT', 'bg-indigo-950 text-indigo-400 border-indigo-500/30');
+          speechHud.textContent = 'Recording stopped. Choose your export options below.';
+
+          // Present export modal with all takes and master file
+          openExportModal(exportTakes, effectiveMode, extension);
+        }).catch((err) => {
+          console.error('Error saving recording:', err);
+          setBadge(vadStatus, 'ERROR', 'bg-red-950 text-red-400 border-red-500/30');
+          speechHud.textContent = '⚠ Error saving recording: ' + (err && err.message ? err.message : String(err));
+        });
       } else {
-        setBadge(vadStatus, 'STOPPED', 'bg-gray-800 text-gray-400 border-gray-700');
-        speechHud.textContent = activeRecordMode === 'off'
-          ? 'Session ended (sync-only).'
-          : 'Session ended (no recording was active).';
+        if (isRehearsal) {
+          setBadge(vadStatus, 'REHEARSAL COMPLETE', 'bg-emerald-950 text-emerald-400 border-emerald-500/30');
+          const count = cues.rehearsalWordsList.length;
+          speechHud.textContent = `Trial complete! ${count} fumbled ${count === 1 ? 'word' : 'words'} highlighted for your live take.`;
+        } else {
+          setBadge(vadStatus, 'STOPPED', 'bg-gray-800 text-gray-400 border-gray-700');
+          speechHud.textContent = activeRecordMode === 'off'
+            ? 'Session ended (sync-only).'
+            : 'Session ended (no recording was active).';
+        }
       }
-    }
 
-    btnStart.classList.remove('hidden');
-    if (btnRehearse) btnRehearse.classList.remove('hidden');
-    btnStop.classList.add('hidden');
-    recIndicator.classList.add('hidden');
-    isRehearsal = false;
-    updateStopButtonText();
-    updateStartButton();
+      btnStart.classList.remove('hidden');
+      if (btnRehearse) btnRehearse.classList.remove('hidden');
+      btnStop.classList.add('hidden');
+      recIndicator.classList.add('hidden');
+      isRehearsal = false;
+      updateStopButtonText();
+      updateStartButton();
+    }, FLUSH_DELAY_MS);
   });
 
   // ---- Keyboard manual stepping & Hotkeys ---------------------------------
@@ -1983,8 +1617,7 @@
   renderRehearsalTags();
   if (optFontsize) {
     const initialFontSize = parseInt(optFontsize.value, 10) || 25;
-    linesContainer.style.fontSize = `${initialFontSize}px`;
-    currentLineHeight = getLineHeightForFontSize(initialFontSize);
+    currentLineHeight = viewport.setFontSize(initialFontSize, parseInt(optLines.value, 10));
   }
   if (optBoxWidth) {
     const savedBoxWidth = configStore ? configStore.get('ui.box_width_pct') : localStorage.getItem('teleprompter_box_width_pct');
