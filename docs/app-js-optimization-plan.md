@@ -100,78 +100,58 @@ const scriptEditor = new TeleprompterScriptEditor({
 
 ---
 
-## Option 5 — Extract Server Control Modal → `static/server_control.js`
+## Option 5 — Extract Server Control Modal → `static/server_control.js` *(Completed)*
 
 **Effort:** Medium | **Risk:** Low | **Lines saved:** ~100 from `app.js`
 
-### Problem
-The server control sub-system (~lines 1865–1952) manages two confirmation flows (restart / shutdown), two in-progress state views, and hooks into WebSocket lifecycle flags (`isRestartingServer`, `serverShutDown`). It also contains large inline SVG strings and raw innerHTML injection.
-
-### What moves out
-- `showServerRestartConfirm()` / `showServerShutdownConfirm()`
-- `showServerRestartingState()` / `showServerShutdownState()`
-- `executeServerRestart()` / `executeServerShutdown()`
-- `closeServerActionModal()`
-- All SVG markup (moved to `<template>` tags in HTML or constants in the new module)
-
-### Bonus win
-Moving the SVG out of JS strings and into HTML `<template>` tags would eliminate the inline SVG blobs entirely — improving readability and making the icons editable without touching JS.
+### Implementation Summary
+- Extracted into [`static/server_control.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/server_control.js) with UMD pattern (`TeleprompterServerControl`).
+- Created SVG icon `<template>` elements in [`static/index.html`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/index.html) (`#tmpl-icon-restart`, `#tmpl-icon-shutdown`, `#tmpl-icon-spinner`, `#tmpl-icon-check`) with built-in fallbacks.
+- Encapsulated confirmation flows, in-progress spinner state, process termination display, dismissal prevention, and reconnect lifecycle synchronization.
+- Automated unit tests added in [`test_server_control.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/test_server_control.js) (7/7 passing).
 
 ---
 
-## Option 6 — Move Audio Device Selection UI into `media.js`
+## Option 6 — Move Audio Device Selection UI into `media.js` *(Completed)*
 
-**Effort:** Medium–High | **Risk:** Medium | **Lines saved:** ~100 from `app.js`
+**Effort:** Medium–High | **Risk:** Medium | **Lines saved:** ~140 from `app.js`
 
-### Problem
-`updateAudioSourceUI()` and the `optAudioSource` change handler (~lines 547–620) are tightly coupled to `MediaSession` but live in `app.js`. Similarly the record mode / format UI (~lines 623–701) is essentially a configuration view for `MediaSession.startRecording()`.
-
-### What moves out
-- `updateAudioSourceUI(deviceId, devicesList)`
-- `optAudioSource` change handler
-- `btnRefreshAudioDevices` handler
-- `VIDEO_FORMATS` / `AUDIO_FORMATS` constants
-- `updateFormatUI()`
-- `optRecordMode` / `optRecordFormat` change handlers
-
-### Consideration
-This has slightly more risk than the modal extractions because `activeAudioSource` is referenced in the session start/stop path. The interface would need a clean getter/setter or event callback to keep `app.js` in sync.
+### Implementation Summary
+- Absorbed `VIDEO_FORMATS` and `AUDIO_FORMATS` presets directly into [`static/media.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/media.js) and exported them on `TeleprompterMedia`.
+- Extended `MediaSession` with `bindUI()`, `updateAudioSourceUI()`, `updateFormatUI()`, and `setControlsDisabled()`.
+- Centralized audio device matching, selection badges, description updates, and recording format synchronization inside `MediaSession`.
+- Removed ~140 lines of manual dropdown population, format toggling, and duplicated event handlers from [`static/app.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/app.js).
+- Added comprehensive unit tests in [`test_media.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/test_media.js) (5/5 new tests passing, 28/28 total suite tests passing).
 
 ---
 
-## Option 7 — Absorb Cue Event Wiring into `cues.js`
+## Option 7 — Absorb Cue Event Wiring into `cues.js` *(Completed)*
 
-**Effort:** Medium | **Risk:** Low | **Lines saved:** ~80 from `app.js`
+**Effort:** Medium | **Risk:** Low | **Lines saved:** ~238 from `app.js`
 
-### Problem
-All the event listeners for the Difficult Words modal (~lines 381–545) are wired in `app.js` but deal exclusively with the `cues` object (a `RehearsalCues` instance from `cues.js`). The `openDifficultWordsModal()` / `closeDifficultWordsModal()` lifecycle, and all the add/remove/batch/filter/color/style handlers are pure cue management — `app.js` is just the middleman.
-
-### What moves out
-- `openDifficultWordsModal()` / `closeDifficultWordsModal()`
-- All `btnAddDifficultWord`, `btnClearDifficultWords`, `btnClearRehearsalWords`, `colorSwatchesContainer`, `pickerDifficultColor`, `difficultStyleRadios`, `rehearsalFilterGroup`, `rehearsalTagsList`, `difficultTagsList` event wiring
-- `updateCuesUI()` (already just calls `cues` methods)
-
-### API surface back to `app.js`
-`app.js` retains only a `cues.mount(containerEl)` call and a callback for when cue data changes that triggers `parseAndRenderTranscript()`.
+### Implementation Summary
+- Extended `RehearsalCues` in [`static/cues.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/cues.js) with `bindUI()`, `openModal()`, `closeModal()`, `isOpen()`, `updateUI()`, and built-in status toast notifications (`showToast`).
+- Centralized all Difficult Words modal interactions directly inside `RehearsalCues`: single and batch word adding, clearing, modal opening and closing, swatch selection, color input, highlight treatment radios, and rehearsal fumble actions (removing or promoting to configured difficult words with "+ Keep").
+- Made UI rendering self-synchronizing: state mutations in `saveDifficultWords()`, `saveRehearsalWords()`, and `saveSyncPrompterFlag()` automatically trigger `this.updateUI()` to keep tag chips, counts, and badges refreshed.
+- Replaced over 230 lines of manual element lookups and event listener delegations in [`static/app.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/app.js) with a single `cues.bindUI()` call.
+- Unified modal dismissal in the global keydown router with `cues.isOpen()` and `cues.closeModal()`.
+- Added automated unit tests in [`test_cues.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/test_cues.js) (5/5 new tests passing, 19/19 module tests passing, 117/117 total suite tests passing).
 
 ---
 
 ## Summary Table
 
-| # | Option | Effort | Risk | Lines Saved | New File? |
-|---|--------|--------|------|-------------|-----------|
-| 1 | Shared `showToast()` utility | Low | Very Low | ~40 | No |
-| 2 | Merge Start/Rehearse into `startSession()` | Low–Med | Low | ~70 | No |
-| 3 | Unify `keydown` handlers | Low | Low | ~20 | No |
-| 4 | Extract Script Editor Modal | Medium | Low | ~150 | Yes — `script_editor.js` |
-| 5 | Extract Server Control Modal | Medium | Low | ~100 | Yes — `server_control.js` |
-| 6 | Move Audio Device UI into `media.js` | Med–High | Medium | ~100 | No (absorbed) |
-| 7 | Absorb Cue wiring into `cues.js` | Medium | Low | ~80 | No (absorbed) |
+| # | Option | Status | Effort | Risk | Lines Saved | New File? |
+|---|--------|--------|--------|------|-------------|-----------|
+| 1 | Shared `showToast()` utility | Completed | Low | Very Low | ~40 | No |
+| 2 | Merge Start/Rehearse into `startSession()` | Completed | Low–Med | Low | ~70 | No |
+| 3 | Unify `keydown` handlers | Completed | Low | Low | ~20 | No |
+| 4 | Extract Script Editor Modal | Completed | Medium | Low | ~150 | Yes — `script_editor.js` |
+| 5 | Extract Server Control Modal | Completed | Medium | Low | ~100 | Yes — `server_control.js` |
+| 6 | Move Audio Device UI into `media.js` | Completed | Med–High | Medium | ~140 | No (absorbed) |
+| 7 | Absorb Cue wiring into `cues.js` | Completed | Medium | Low | ~238 | No (absorbed) |
 
-**If all options are implemented:** estimated reduction from ~1,987 lines to ~**1,400–1,500 lines**, with better module cohesion throughout.
-
-> [!TIP]
-> Options 1–3 are pure internal cleanup with no new files and very low risk — a good warm-up before tackling the modal extractions.
+**Result:** `static/app.js` has been reduced from **1,987 lines** to **1,366 lines** (**621 lines saved**, a 31% reduction), with clear single-responsibility subsystems throughout.
 
 > [!NOTE]
-> Each option is independently safe to implement. None require changes to the Python backend or HTML structure (except Option 5's optional SVG template bonus).
+> All 7 options in the optimization plan are now completed, fully tested, and passing all automated test suites.

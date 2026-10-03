@@ -30,6 +30,13 @@
       <span id="ws-status" class="text-[10px] px-2 py-0.5 rounded bg-gray-900 text-gray-500 font-mono border border-gray-700">connecting…</span>
     </div>
 
+    <div class="flex items-center justify-center">
+      <button id="btn-clear-highlights" type="button" class="px-3.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-amber-300 hover:text-amber-200 text-xs font-semibold rounded-lg border border-amber-600/40 hover:border-amber-500 shadow-sm transition flex items-center gap-1.5 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-gray-800 disabled:hover:text-amber-300/40 disabled:border-gray-800 disabled:text-gray-500 cursor-pointer" disabled title="Remove rehearsal fumble highlights from the script">
+        <svg class="w-3.5 h-3.5 text-amber-400 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <span>Clear Highlights</span>
+      </button>
+    </div>
+
     <div class="flex items-center gap-2">
       <button id="btn-toggle-panel" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-xs rounded border border-gray-700">Script & Options</button>
       <button id="btn-reset" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-xs rounded border border-gray-700 transition" title="Rewind to start of script without clearing text">Restart Script</button>
@@ -43,6 +50,10 @@
       </button>
       <button id="btn-start" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded shadow transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-indigo-600" disabled>Start Session</button>
       <button id="btn-stop" class="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded shadow hidden transition">Stop & Save Video</button>
+      <button id="btn-reopen-export" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-xs font-medium rounded border border-gray-700 transition hidden items-center gap-1.5 cursor-pointer" title="Re-open the export modal for the last completed recording">
+        <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+        <span>Last Export</span>
+      </button>
     </div>
   </header>
 
@@ -444,6 +455,53 @@
     </div>
   </div>
 
+  <!-- Processing & Take Slicing Modal -->
+  <div id="modal-processing" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md hidden transition-opacity duration-200">
+    <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden flex flex-col text-gray-200">
+      <div class="p-6 space-y-5">
+        
+        <!-- Header / Icon & Title -->
+        <div class="flex items-center gap-3.5">
+          <div class="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-400 shrink-0">
+            <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+          </div>
+          <div>
+            <h3 class="text-base font-bold text-white tracking-wide">Processing & Slicing Takes</h3>
+            <p id="processing-phase-text" class="text-xs text-gray-400 mt-0.5">Preparing audio for transcription…</p>
+          </div>
+        </div>
+
+        <!-- Progress Bar Container -->
+        <div class="space-y-2">
+          <div class="w-full bg-gray-800/90 rounded-full h-3 overflow-hidden border border-gray-700/70 p-0.5 shadow-inner">
+            <div id="processing-progress-bar"
+                 class="bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-400 h-full rounded-full transition-all duration-300 ease-out shadow-sm"
+                 style="width: 5%;">
+            </div>
+          </div>
+          
+          <!-- Stats Row -->
+          <div class="flex justify-between items-center text-[11px] font-mono text-gray-400 px-0.5">
+            <span id="processing-percent-text" class="text-indigo-300 font-semibold">5%</span>
+            <span id="processing-time-remaining" class="text-gray-400">Estimating time…</span>
+          </div>
+        </div>
+
+        <!-- Explanatory note -->
+        <div class="pt-2 border-t border-gray-800/80 flex items-center gap-2 text-[11px] text-gray-400">
+          <svg class="w-3.5 h-3.5 text-indigo-400/80 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span>Aligning word timestamps to create clean section takes.</span>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
   <!-- Section Export Modal -->
   <div id="modal-export" class="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm hidden transition-opacity duration-200">
     <div class="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-xl mx-4 overflow-hidden flex flex-col max-h-[90vh] text-gray-200">
@@ -494,6 +552,20 @@
 
     </div>
   </div>
+
+  <!-- Server Action Modal Templates -->
+  <template id="tmpl-icon-restart">
+    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+  </template>
+  <template id="tmpl-icon-shutdown">
+    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 4.243a9 9 0 01-6.364-2.636 9 9 0 010-12.728m0 0l2.829 2.829M12 3v9"/></svg>
+  </template>
+  <template id="tmpl-icon-spinner">
+    <svg class="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+  </template>
+  <template id="tmpl-icon-check">
+    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+  </template>
 
   <!-- Server Action Modal -->
   <div id="modal-server-action" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md hidden transition-opacity duration-200">
@@ -608,6 +680,8 @@
   <script src="/static/cues.js"></script>
   <script src="/static/timeline.js"></script>
   <script src="/static/viewport.js"></script>
+  <script src="/static/script_editor.js"></script>
+  <script src="/static/server_control.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

@@ -64,7 +64,7 @@ This skill provides the comprehensive guide, runbook, architecture reference, an
 
 | File | Primary Responsibility | Critical Invariants |
 | :--- | :--- | :--- |
-| [`static/media.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/media.js) | Owns `MediaSession`, `MediaRecorder`, Web Audio decoding, LAME MP3 encoding, and `processAudioTakes` | Must downsample/resample cleanly. Must guard against Chromium `decodeAudioData` hangs. Runs `reconcileSectionBoundaries()` so unstarted sections with recorded audio produce takes. |
+| [`static/media.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/media.js) | Owns `MediaSession`, `MediaRecorder`, Web Audio decoding, LAME MP3 encoding, `processAudioTakes`, format presets (`VIDEO_FORMATS`, `AUDIO_FORMATS`), and audio device/format UI binding (`bindUI`) | Must downsample/resample cleanly. Must guard against Chromium `decodeAudioData` hangs. Runs `reconcileSectionBoundaries()` so unstarted sections with recorded audio produce takes. Encapsulates hardware/browser device selection and recording format UI synchronization. |
 | [`static/timeline.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/timeline.js) | `SectionTimeline` deep module tracking wall-clock section boundaries and retake seek targets | When active section transitions, closes previous section. Missing boundary words use cadence lookback (~400ms/word). `resolveBoundaries()` resolves unstarted sections against unaccounted audio. |
 | [`static/export.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/export.js) | `TeleprompterExport` module managing storage adapters (Directory Picker, Direct Download, In-Memory) | Falls back gracefully from File System Access API to direct download. Formats durations cleanly. |
 | [`static/app.js`](file:///Users/philkershaw/Documents/work/Tools/teleprompter/static/app.js) | UI coordinator binding start/stop, retake button, HUD status badges, and export modal | Must provide a 1200ms flush window before stopping MediaRecorder. Must prevent duplicate stop calls with `isStopping` guard. |
@@ -100,6 +100,34 @@ When modifying section slicing or timeline recording:
 
 ---
 
+## 3b. Post-Recording Boundary Refinement (primary boundary source)
+
+**Root cause it fixes:** live boundaries come from when the *live* Whisper first reports a word in the next section, which lags real speech by several seconds on CPU. `_estimateStartSec` in `timeline.js` caps cadence lookback at 1.2s, so a large lag leaves the cut far too late (Section 1 swallows most of Section 2). Do NOT try to fix this by tuning the live lookback; the audio itself is the source of truth.
+
+**Flow:**
+```
+[Stop] -> finalizeRecording() decodes AudioBuffer
+   -> opts.refineBoundaries(audioBuffer, sections)  (app.js: requestRefinedBoundaries)
+   -> audioBufferToPcm16k()  (media.js: mono, 16 kHz, int16)
+   -> WebSocket JSON chunks {type:'refine_chunk', id, seq, data(base64)} (~400 KB each; server max_size is 2 MB)
+   -> {type:'refine_end', id, sections:[{id,text}]}
+   -> server.py handle_client intercepts messages whose first 64 chars contain "refine_" (so `type` must be the FIRST JSON key); everything else still goes to prompter.dispatch
+   -> worker thread: refine.RefineUpload.to_samples() -> transcriber.transcribe_full() (word timestamps, model from engine.refine_model, default small.en, shares _MODEL_CACHE)
+   -> refine.align_sections() (difflib monotonic match of script tokens to spoken tokens; fuzzy, e.g. VSR400 vs VSR 400)
+   -> {type:'refine_result', id, ok, boundaries:{sectionId:{startSec,endSec}|null}} via hub.schedule
+   -> media.js applyRefinedBoundaries() overwrites startSec/endSec, then processAudioTakes() slices as normal
+```
+
+**Invariants:**
+1. Failure is always silent-fallback: timeout (max(60s, 2x duration), cap 600s), error, closed socket, or null section => keep live boundaries. Never let refinement block or lose a recording.
+2. The browser sends decoded PCM so the server never decodes WebM.
+3. `applyRefinedBoundaries` only accepts finite ranges with end > start.
+4. Python changes (`server.py`, `transcriber.py`, `refine.py`) need a server restart; JS changes need a hard refresh.
+
+**Known gaps:** retakes (section read twice) give a blended match (intended rule: use the LAST complete read); `engine.refine_model` is read from `teleprompter.json` but not in the config schema/UI; optional future step is snapping cuts to the nearest silence.
+
+---
+
 ## 4. Verification & Testing Runbook
 
 Always run the full test suite when making changes to media, timeline, or export logic:
@@ -110,7 +138,10 @@ node test_media.js
 node test_export.js
 node test_timeline.js
 node test_simulation.js
+node --test test_refine_media.js
 ```
+
+Backend (refinement matching): `.venv/bin/python -m unittest test_refine.py`
 
 ### Running the Complete Node Test Suite
 ```bash
@@ -134,3 +165,9 @@ node --test test_*.js
 
 ### Symptom 4: File System Directory picker throws security error
 - **Check**: Browser security context. `showDirectoryPicker()` requires a secure context (`localhost` or HTTPS) and must be invoked directly from a user activation (click event). `TeleprompterExport` must fall back to direct downloads if rejected.
+
+### Symptom 5: Cuts land late; Section 1 contains most of Section 2
+- **Cause**: live Whisper lag + the 1.2s lookback cap (see Section 3b). Check the browser console: `[REFINE]` warnings mean refinement fell back to live boundaries; the `[DIAG]` block shows the live values.
+- **Check**: Was the server restarted after Python changes? Is `engine.refine_model` valid? Did the first run have to download the model (slow, may hit the timeout)?
+- **Check**: If a section comes back null, the transcript did not match the script text; compare the spoken words to the script wording.
+

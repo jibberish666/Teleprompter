@@ -22,6 +22,7 @@ import audio_capture
 import config
 import session
 import transcriber
+import refine
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(ROOT, "static")
@@ -235,6 +236,47 @@ async def main(args):
         port=args.port,
     )
 
+    refine_uploads = {}
+
+    def run_refine(req_id, sections, upload):
+        """Worker thread: full-file transcription, then match words to script."""
+        try:
+            samples = upload.to_samples()
+            model_name = (load_persisted_config().get("engine", {}) or {}).get(
+                "refine_model", transcriber.DEFAULT_REFINE_MODEL
+            ) or transcriber.DEFAULT_REFINE_MODEL
+
+            def on_progress(current_sec, total_sec):
+                hub.schedule({
+                    "type": "refine_progress",
+                    "id": req_id,
+                    "current": round(current_sec, 2),
+                    "total": round(total_sec, 2),
+                })
+
+            words = transcriber.transcribe_full(
+                samples,
+                model_name=model_name,
+                device=args.device,
+                compute_type=args.compute_type,
+                on_progress=on_progress,
+            )
+            boundaries = refine.align_sections(sections, words)
+            hub.schedule({"type": "refine_result", "id": req_id, "ok": True, "boundaries": boundaries})
+        except Exception as exc:  # surfaced to the browser, which falls back to live boundaries
+            hub.schedule({"type": "refine_result", "id": req_id, "ok": False, "error": str(exc)})
+
+    def handle_refine(msg):
+        req_id = msg.get("id")
+        if msg.get("type") == "refine_chunk":
+            refine_uploads.setdefault(req_id, refine.RefineUpload()).add(msg.get("seq", 0), msg.get("data", ""))
+        elif msg.get("type") == "refine_end":
+            upload = refine_uploads.pop(req_id, None)
+            if upload is None:
+                hub.schedule({"type": "refine_result", "id": req_id, "ok": False, "error": "no audio received"})
+                return
+            loop.run_in_executor(None, run_refine, req_id, msg.get("sections", []), upload)
+
     async def handle_client(ws):
         out = asyncio.Queue(maxsize=256)
         hub.register(out)
@@ -243,6 +285,14 @@ async def main(args):
             for init_msg in prompter.get_initial_messages():
                 await out.put(json.dumps(init_msg))
             async for raw in ws:
+                # Text frames carrying refine audio/commands are handled here;
+                # binary frames (live PCM) and all other messages go to the session.
+                if isinstance(raw, str) and '"refine_' in raw[:64]:
+                    try:
+                        handle_refine(json.loads(raw))
+                    except Exception:
+                        pass
+                    continue
                 prompter.dispatch(raw)
         except Exception:
             pass

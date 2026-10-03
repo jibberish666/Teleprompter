@@ -42,6 +42,27 @@ class TestConfigValidation(unittest.TestCase):
         self.assertEqual(config.validate_and_sanitize(None), config.get_default_config())
         self.assertEqual(config.validate_and_sanitize("not a dict"), config.get_default_config())
 
+    def test_sanitize_rehearsal_words(self):
+        raw = {
+            "script": {
+                "rehearsal_words": [
+                    {"word": "Synergy", "clean": "synergy", "reason": "stumbled"},
+                    "Paradigm",
+                    "[object Object]",
+                    "[object object]",
+                    {"word": "[object Object]", "clean": "[object object]", "reason": "skipped"},
+                ]
+            }
+        }
+        cfg = config.validate_and_sanitize(raw)
+        self.assertEqual(
+            cfg["script"]["rehearsal_words"],
+            [
+                {"word": "Synergy", "clean": "synergy", "reason": "stumbled"},
+                "paradigm",
+            ],
+        )
+
 
 class TestConfigMigrationAndPersistence(unittest.TestCase):
     def setUp(self):

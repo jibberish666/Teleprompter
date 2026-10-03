@@ -41,6 +41,7 @@
         for (const s of this._sections) {
           if (s.startSec === undefined) s.startSec = null;
           if (s.endSec === undefined) s.endSec = null;
+          if (s._lastSeenSec === undefined) s._lastSeenSec = null;
         }
       }
     }
@@ -69,7 +70,9 @@
       if (hasMissed) {
         const missedWords = word.globalIdx - cur.startIndex;
         // ~140 WPM => ~400ms (0.4s) per word
-        const lookbackSec = missedWords * 0.4;
+        // Cap cadence lookback to a maximum threshold (max 3 words / ~1.2s max)
+        // so delayed speech recognition or vocabulary matches deep inside a section cannot look back across 10-20 words into the past
+        const lookbackSec = Math.min(1.2, Math.max(0, missedWords * 0.4));
         estStart = Math.max(0, nowSec - lookbackSec);
       } else {
         estStart = Math.max(0, nowSec - 0.1);
@@ -121,14 +124,30 @@
           curStartSec = this._estimateStartSec(cur, word, nowSec);
         }
 
-        // Close previously active section
+        // Close previously active section with protective duration floor
         if (this._activeId && isSessionActive) {
           const prev = this._sections.find((s) => s.id === this._activeId);
           if (prev && prev.startSec !== null && prev.endSec === null) {
+            // Enforce protective duration floor on currently active section:
+            // Cannot be cut shorter than its actual spoken dwell time or word-count pacing
+            const hasValidEnd = prev.endIndex !== null && prev.endIndex !== undefined;
+            const hasValidStart = prev.startIndex !== null && prev.startIndex !== undefined;
+            const prevWordCount = (hasValidEnd && hasValidStart)
+              ? Math.max(0, prev.endIndex - prev.startIndex + 1)
+              : 0;
+            const minRequired = Math.min(this._minDwellSec, Math.max(0.5, prevWordCount * 0.25));
+            const dwellSec = nowSec - prev.startSec;
+
+            let floorSec = prev.startSec + Math.min(minRequired, dwellSec);
+            if (prev._lastSeenSec !== null && prev._lastSeenSec !== undefined && !isNaN(Number(prev._lastSeenSec))) {
+              floorSec = Math.max(floorSec, Number(prev._lastSeenSec));
+            }
+            floorSec = Math.min(nowSec, Math.max(prev.startSec, floorSec));
+
             if (hasMissed && curStartSec !== null && curStartSec < nowSec) {
-              prev.endSec = Math.max(prev.startSec || 0, curStartSec);
+              prev.endSec = Math.max(floorSec, curStartSec);
             } else {
-              prev.endSec = nowSec;
+              prev.endSec = Math.max(floorSec, nowSec);
             }
           }
         }
@@ -136,18 +155,24 @@
         this._activeId = secId;
 
         // Open newly active section
-        if (cur && isSessionActive && cur.startSec === null) {
-          cur.startSec = curStartSec !== null ? curStartSec : this._estimateStartSec(cur, word, nowSec);
+        if (cur && isSessionActive) {
+          if (cur.startSec === null) {
+            cur.startSec = curStartSec !== null ? curStartSec : this._estimateStartSec(cur, word, nowSec);
+          }
+          cur._lastSeenSec = nowSec;
         }
 
         if (this._onActiveSectionChange && cur) {
           this._onActiveSectionChange(cur);
         }
       } else if (isSessionActive) {
-        // Same section — ensure startSec is initialized
+        // Same section — ensure startSec is initialized and track last spoken word timestamp
         const cur = this._sections.find((s) => s.id === secId);
-        if (cur && cur.startSec === null) {
-          cur.startSec = this._estimateStartSec(cur, word, nowSec);
+        if (cur) {
+          if (cur.startSec === null) {
+            cur.startSec = this._estimateStartSec(cur, word, nowSec);
+          }
+          cur._lastSeenSec = nowSec;
         }
       }
     }
@@ -163,6 +188,7 @@
       }
       target.startSec = null;
       target.endSec = null;
+      target._lastSeenSec = null;
       return {
         seekIndex: target.startIndex,
         title: target.title || '',
@@ -203,6 +229,22 @@
       // Close active section if still open
       if (this._activeId) {
         this.close(dur);
+      }
+
+      // Anchor the first section to the recording start (t=0).
+      //
+      // Whisper on CPU can run 10–15s behind real-time speech. By the time it
+      // returns the first Section 1 recognition token, the speaker may already
+      // be deep into Section 2. The timeline then stamps Section 1's startSec
+      // at that late moment (e.g. 14.989s in an 18.5s session), collapsing its
+      // take window to just 1–2 seconds.
+      //
+      // Section 1 ALWAYS starts with the audio recording (t=0). Any unaccounted
+      // audio before the first recognised word belongs to Section 1. Anchoring
+      // here ensures the take slice covers the full spoken duration regardless
+      // of Whisper's recognition latency.
+      if (this._sections[0] && this._sections[0].startSec !== null) {
+        this._sections[0].startSec = 0;
       }
 
       for (let i = 1; i < this._sections.length; i++) {
@@ -252,6 +294,7 @@
       this._sections.forEach((s) => {
         s.startSec = null;
         s.endSec = null;
+        s._lastSeenSec = null;
       });
       this._activeId = activeId || null;
       if (this._onActiveSectionChange && this._activeId) {

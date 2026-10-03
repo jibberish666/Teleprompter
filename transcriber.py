@@ -44,6 +44,46 @@ ENGINE_PROFILES = {
 _MODEL_CACHE = {}
 _MODEL_CACHE_LOCK = threading.Lock()
 
+DEFAULT_REFINE_MODEL = "small.en"
+
+
+def transcribe_full(samples, model_name=DEFAULT_REFINE_MODEL, device="cpu", compute_type="int8", on_progress=None):
+    """One-off transcription of a complete recording with per-word timestamps.
+
+    samples: float32 numpy array, mono, 16 kHz (the same RATE the live loop uses).
+    Returns [{"word": str, "start": float, "end": float}, ...] in speech order.
+    Used after a session ends so boundaries come from the audio itself rather
+    than from the (lagging) live recogniser.
+    """
+    cache_key = (model_name, device, compute_type)
+    with _MODEL_CACHE_LOCK:
+        model = _MODEL_CACHE.get(cache_key)
+    if model is None:
+        model = WhisperModel(model_name, device=device, compute_type=compute_type, cpu_threads=4)
+        with _MODEL_CACHE_LOCK:
+            _MODEL_CACHE[cache_key] = model
+
+    segments, info = model.transcribe(
+        samples,
+        beam_size=5,
+        word_timestamps=True,
+        vad_filter=False,
+        condition_on_previous_text=False,
+    )
+    words = []
+    duration = getattr(info, "duration", None)
+    if not duration and len(samples) > 0:
+        duration = len(samples) / RATE
+    for seg in segments:
+        for w in (seg.words or []):
+            words.append({"word": w.word.strip(), "start": float(w.start), "end": float(w.end)})
+        if callable(on_progress) and duration:
+            try:
+                on_progress(float(seg.end), float(duration))
+            except Exception:
+                pass
+    return words
+
 
 class Transcriber:
     def __init__(

@@ -267,3 +267,208 @@ describe('TeleprompterCues - ConfigStore Persistence', () => {
     assert.deepEqual(config.get('ui.difficult_words'), ['cachedWord', 'newWord']);
   });
 });
+
+describe('TeleprompterCues - UI Binding & Modal Lifecycle', () => {
+  function createMockElement(initialClasses = []) {
+    const classes = new Set(initialClasses);
+    const listeners = new Map();
+    const attrs = new Map();
+    return {
+      value: '',
+      textContent: '',
+      innerHTML: '',
+      checked: false,
+      disabled: false,
+      classList: {
+        add: (...names) => names.forEach((n) => classes.add(n)),
+        remove: (...names) => names.forEach((n) => classes.delete(n)),
+        toggle: (name) => {
+          if (classes.has(name)) classes.delete(name);
+          else classes.add(name);
+        },
+        contains: (name) => classes.has(name),
+      },
+      getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+      setAttribute: (k, v) => attrs.set(k, String(v)),
+      addEventListener: (evt, handler) => {
+        if (!listeners.has(evt)) listeners.set(evt, []);
+        listeners.get(evt).push(handler);
+      },
+      trigger: function (evtName, payload = {}) {
+        const handlers = listeners.get(evtName) || [];
+        const evt = Object.assign({ type: evtName, target: this, defaultPrevented: false, preventDefault: () => {} }, payload);
+        handlers.forEach((h) => h(evt));
+      },
+      closest: () => null,
+      querySelectorAll: () => [],
+      focus: () => {},
+    };
+  }
+
+  test('bindUI binds elements and manages modal open/close/isOpen state', () => {
+    const cues = new CuesModule.RehearsalCues();
+    const modalEl = createMockElement(['hidden']);
+    const btnOpen = createMockElement();
+    const btnClose = createMockElement();
+    const inputWord = createMockElement();
+    const diffCountBadge = createMockElement();
+
+    cues.bindUI({
+      modalEl,
+      btnOpen,
+      btnClose,
+      inputWord,
+      diffCountBadge,
+    });
+
+    assert.equal(cues.isOpen(), false);
+    btnOpen.trigger('click');
+    assert.equal(cues.isOpen(), true);
+    assert.equal(modalEl.classList.contains('hidden'), false);
+
+    btnClose.trigger('click');
+    assert.equal(cues.isOpen(), false);
+    assert.equal(modalEl.classList.contains('hidden'), true);
+  });
+
+  test('adds difficult words via add button and enter key with toast', () => {
+    let lastToast = null;
+    const cues = new CuesModule.RehearsalCues();
+    const modalEl = createMockElement(['hidden']);
+    const inputWord = createMockElement();
+    const btnAdd = createMockElement();
+    const toastEl = createMockElement();
+
+    cues.bindUI(
+      { modalEl, inputWord, btnAdd, toastEl },
+      { onToast: (msg) => { lastToast = msg; } }
+    );
+
+    inputWord.value = 'pneumonoultramicroscopicsilicovolcanoconiosis';
+    btnAdd.trigger('click');
+
+    assert.equal(cues.difficultWordsList.length, 1);
+    assert.equal(lastToast, 'Word added ✓');
+    assert.equal(inputWord.value, '');
+
+    // Press enter on input
+    inputWord.value = 'supercalifragilistic';
+    inputWord.trigger('keydown', { key: 'Enter' });
+    assert.equal(cues.difficultWordsList.length, 2);
+    assert.equal(inputWord.value, '');
+  });
+
+  test('batch imports words and closes batch container', () => {
+    let lastToast = null;
+    const cues = new CuesModule.RehearsalCues();
+    const batchContainer = createMockElement(['hidden']);
+    const textareaBatch = createMockElement();
+    const btnImportBatch = createMockElement();
+    const btnToggleBatch = createMockElement();
+
+    cues.bindUI(
+      { batchContainer, textareaBatch, btnImportBatch, btnToggleBatch },
+      { onToast: (msg) => { lastToast = msg; } }
+    );
+
+    // Toggle container
+    btnToggleBatch.trigger('click');
+    assert.equal(batchContainer.classList.contains('hidden'), false);
+
+    // Import batch
+    textareaBatch.value = 'alpha, beta; gamma\ndelta';
+    btnImportBatch.trigger('click');
+
+    assert.equal(cues.difficultWordsList.length, 4);
+    assert.equal(lastToast, 'Batch words imported ✓');
+    assert.equal(batchContainer.classList.contains('hidden'), true);
+    assert.equal(textareaBatch.value, '');
+  });
+
+  test('btnClearDifficult and btnClearRehearsal clear lists with toasts', () => {
+    let lastToast = null;
+    const cues = new CuesModule.RehearsalCues();
+    cues.addDifficultWord('word1, word2');
+    cues.recordFumbles([{ word: 'stumble1', clean: 'stumble1', reason: 'stumbled' }]);
+
+    const btnClearDifficult = createMockElement();
+    const btnClearRehearsal = createMockElement();
+
+    cues.bindUI(
+      { btnClearDifficult, btnClearRehearsal },
+      { onToast: (msg) => { lastToast = msg; } }
+    );
+
+    assert.equal(cues.difficultWordsList.length, 2);
+    btnClearDifficult.trigger('click');
+    assert.equal(cues.difficultWordsList.length, 0);
+    assert.equal(lastToast, 'Cleared all words');
+
+    assert.equal(cues.rehearsalWordsList.length, 1);
+    btnClearRehearsal.trigger('click');
+    assert.equal(cues.rehearsalWordsList.length, 0);
+    assert.equal(lastToast, 'Cleared rehearsal fumbles ✓');
+  });
+
+  test('style and swatch selection updates state and displays toast', () => {
+    let lastToast = null;
+    const cues = new CuesModule.RehearsalCues();
+    const colorPicker = createMockElement();
+    const swatchEl = createMockElement();
+    swatchEl.setAttribute('data-color', '#10b981');
+    const colorSwatches = createMockElement();
+    colorSwatches.addEventListener = (evt, handler) => {
+      if (evt === 'click') {
+        colorSwatches._click = (target) => handler({ target: { closest: () => target } });
+      }
+    };
+
+    const radioPill = createMockElement();
+    radioPill.value = 'glow';
+
+    cues.bindUI(
+      { colorPicker, colorSwatches, styleRadios: [radioPill] },
+      { onToast: (msg) => { lastToast = msg; } }
+    );
+
+    // Color swatch click
+    colorSwatches._click(swatchEl);
+    assert.equal(cues.difficultColor, '#10b981');
+    assert.equal(lastToast, 'Color updated ✓');
+
+    // Style radio change
+    radioPill.trigger('change');
+    assert.equal(cues.difficultStyle, 'glow');
+    assert.equal(lastToast, 'Style updated ✓');
+  });
+
+  test('btnClearHighlights is bound, toggles disabled state, and clears fumbles on click', () => {
+    let lastToast = null;
+    const cues = new CuesModule.RehearsalCues();
+    const btnClearHighlights = createMockElement();
+
+    cues.bindUI(
+      { btnClearHighlights },
+      { onToast: (msg) => { lastToast = msg; } }
+    );
+
+    // Initial state: no fumbles -> disabled
+    assert.equal(btnClearHighlights.disabled, true);
+    assert.equal(btnClearHighlights.classList.contains('opacity-30'), true);
+
+    // Add fumbles -> enabled
+    cues.recordFumbles([{ word: 'turbo', clean: 'turbo', reason: 'stumbled' }]);
+    assert.equal(btnClearHighlights.disabled, false);
+    assert.equal(btnClearHighlights.classList.contains('cursor-pointer'), true);
+    assert.equal(btnClearHighlights.classList.contains('opacity-30'), false);
+
+    // Click btnClearHighlights -> fumbles cleared, disabled again
+    btnClearHighlights.trigger('click');
+    assert.equal(cues.rehearsalWordsList.length, 0);
+    assert.equal(btnClearHighlights.disabled, true);
+    assert.equal(btnClearHighlights.classList.contains('opacity-30'), true);
+    assert.equal(lastToast, 'Cleared 1 rehearsal fumble ✓');
+  });
+});
+
+

@@ -79,6 +79,11 @@
       this.rehearsalFilter = 'all'; // 'all' | 'skipped' | 'stumbled' | 'repeated'
       this.syncPrompterWithFilter = false;
 
+      // Bound UI elements
+      this.elements = null;
+      this._toastTimer = null;
+      this.toastFn = null;
+
       this.load();
     }
 
@@ -167,6 +172,7 @@
           this.storage.setItem('teleprompter_difficult_style', this.difficultStyle);
         } catch (_) {}
       }
+      this.updateUI();
     }
 
     /**
@@ -182,6 +188,7 @@
           this.storage.setItem('teleprompter_rehearsal_words', JSON.stringify(this.rehearsalWordsList));
         } catch (_) {}
       }
+      this.updateUI();
     }
 
     /**
@@ -196,6 +203,7 @@
           this.storage.setItem('teleprompter_sync_fumble_filter', String(this.syncPrompterWithFilter));
         } catch (_) {}
       }
+      this.updateUI();
     }
 
     // ---- Difficult Words Operations -----------------------------------------
@@ -442,7 +450,7 @@
 
     // ---- DOM UI Integration --------------------------------------------------
 
-    updateCountBadge(countBadgeEl) {
+    updateCountBadge(countBadgeEl = (this.elements && this.elements.diffCountBadge)) {
       if (!countBadgeEl) return;
       const diffCount = this.difficultWordsList.length;
       const rehCount = this.rehearsalWordsList.length;
@@ -455,7 +463,12 @@
       }
     }
 
-    applyColorStyles(previewEl, swatchesContainer, pickerEl, radios) {
+    applyColorStyles(
+      previewEl = (this.elements && this.elements.previewEl),
+      swatchesContainer = (this.elements && this.elements.colorSwatches),
+      pickerEl = (this.elements && this.elements.colorPicker),
+      radios = (this.elements && this.elements.styleRadios)
+    ) {
       if (typeof document !== 'undefined' && document.documentElement) {
         document.documentElement.style.setProperty('--difficult-color', this.difficultColor);
         document.documentElement.style.setProperty('--difficult-bg', hexToRgba(this.difficultColor, 0.22));
@@ -489,7 +502,10 @@
       }
     }
 
-    renderDifficultTags(tagsListEl, wordsCountEl) {
+    renderDifficultTags(
+      tagsListEl = (this.elements && this.elements.difficultTagsList),
+      wordsCountEl = (this.elements && this.elements.difficultWordsCount)
+    ) {
       if (wordsCountEl) wordsCountEl.textContent = String(this.difficultWordsList.length);
       if (!tagsListEl) return;
 
@@ -506,7 +522,13 @@
       `).join('');
     }
 
-    renderRehearsalTags(tagsListEl, wordsCountEl, countElements = {}, filterGroupEl, clearBtnEl) {
+    renderRehearsalTags(
+      tagsListEl = (this.elements && this.elements.rehearsalTagsList),
+      wordsCountEl = (this.elements && this.elements.rehearsalWordsCount),
+      countElements = (this.elements && this.elements.filterCounts) || {},
+      filterGroupEl = (this.elements && this.elements.rehearsalFilterGroup),
+      clearBtnEl = (this.elements && this.elements.btnClearRehearsal)
+    ) {
       if (wordsCountEl) wordsCountEl.textContent = String(this.rehearsalWordsList.length);
       const counts = this.getCounts();
 
@@ -533,6 +555,19 @@
           const matchCount = counts[this.rehearsalFilter] || 0;
           clearBtnEl.textContent = `Clear ${this.rehearsalFilter} (${matchCount})`;
           clearBtnEl.disabled = matchCount === 0;
+        }
+      }
+
+      const clearHighlightsEl = (this.elements && this.elements.btnClearHighlights);
+      if (clearHighlightsEl) {
+        const hasFumbles = this.rehearsalWordsList.length > 0;
+        clearHighlightsEl.disabled = !hasFumbles;
+        if (hasFumbles) {
+          clearHighlightsEl.classList.remove('opacity-30', 'cursor-not-allowed');
+          clearHighlightsEl.classList.add('cursor-pointer');
+        } else {
+          clearHighlightsEl.classList.add('opacity-30', 'cursor-not-allowed');
+          clearHighlightsEl.classList.remove('cursor-pointer');
         }
       }
 
@@ -569,6 +604,272 @@
           </span>
         `;
       }).join('');
+    }
+
+    updateUI() {
+      if (!this.elements) return;
+      const el = this.elements;
+      this.applyColorStyles(el.previewEl, el.colorSwatches, el.colorPicker, el.styleRadios);
+      this.renderDifficultTags(el.difficultTagsList, el.difficultWordsCount);
+      this.renderRehearsalTags(el.rehearsalTagsList, el.rehearsalWordsCount, el.filterCounts, el.rehearsalFilterGroup, el.btnClearRehearsal);
+      this.updateCountBadge(el.diffCountBadge);
+    }
+
+    isOpen() {
+      return Boolean(this.elements && this.elements.modalEl && !this.elements.modalEl.classList.contains('hidden'));
+    }
+
+    openModal() {
+      if (!this.elements || !this.elements.modalEl) return;
+      this.updateUI();
+      this.elements.modalEl.classList.remove('hidden');
+      if (this.elements.inputWord) {
+        setTimeout(() => this.elements.inputWord.focus(), 50);
+      }
+    }
+
+    open() {
+      this.openModal();
+    }
+
+    closeModal() {
+      if (!this.elements || !this.elements.modalEl) return;
+      this.elements.modalEl.classList.add('hidden');
+      if (this.elements.batchContainer) this.elements.batchContainer.classList.add('hidden');
+      if (this.elements.inputWord) this.elements.inputWord.value = '';
+      if (this.elements.textareaBatch) this.elements.textareaBatch.value = '';
+    }
+
+    close() {
+      this.closeModal();
+    }
+
+    showToast(msg = 'Saved & Applied ✓', durationMs = 1800) {
+      if (this.toastFn) {
+        this.toastFn(msg, durationMs);
+        return;
+      }
+      const el = this.elements && this.elements.toastEl;
+      if (!el) return;
+      el.textContent = msg;
+      el.classList.remove('opacity-0');
+      el.classList.add('opacity-100');
+      if (this._toastTimer) clearTimeout(this._toastTimer);
+      this._toastTimer = setTimeout(() => {
+        el.classList.remove('opacity-100');
+        el.classList.add('opacity-0');
+      }, durationMs);
+    }
+
+    bindUI(elements = {}, options = {}) {
+      const doc = typeof document !== 'undefined' ? document : null;
+      const get = (id) => (doc ? doc.getElementById(id) : null);
+
+      this.elements = {
+        diffCountBadge: elements.diffCountBadge !== undefined ? elements.diffCountBadge : get('difficult-count-badge'),
+        modalEl: elements.modalEl !== undefined ? elements.modalEl : (elements.modalDifficultWords !== undefined ? elements.modalDifficultWords : get('modal-difficult-words')),
+        btnOpen: elements.btnOpen !== undefined ? elements.btnOpen : (elements.btnOpenDifficultWords !== undefined ? elements.btnOpenDifficultWords : get('btn-open-difficult-words')),
+        btnClose: elements.btnClose !== undefined ? elements.btnClose : (elements.btnCloseDifficultWords !== undefined ? elements.btnCloseDifficultWords : get('btn-close-difficult-words')),
+        btnSave: elements.btnSave !== undefined ? elements.btnSave : (elements.btnSaveDifficultWords !== undefined ? elements.btnSaveDifficultWords : get('btn-save-difficult-words')),
+        inputWord: elements.inputWord !== undefined ? elements.inputWord : (elements.inputDifficultWord !== undefined ? elements.inputDifficultWord : get('input-difficult-word')),
+        btnAdd: elements.btnAdd !== undefined ? elements.btnAdd : (elements.btnAddDifficultWord !== undefined ? elements.btnAddDifficultWord : get('btn-add-difficult-word')),
+        btnClearDifficult: elements.btnClearDifficult !== undefined ? elements.btnClearDifficult : (elements.btnClearDifficultWords !== undefined ? elements.btnClearDifficultWords : get('btn-clear-difficult-words')),
+        btnToggleBatch: elements.btnToggleBatch !== undefined ? elements.btnToggleBatch : (elements.btnToggleBatchWords !== undefined ? elements.btnToggleBatchWords : get('btn-toggle-batch-words')),
+        batchContainer: elements.batchContainer !== undefined ? elements.batchContainer : (elements.batchWordsContainer !== undefined ? elements.batchWordsContainer : get('batch-words-container')),
+        textareaBatch: elements.textareaBatch !== undefined ? elements.textareaBatch : (elements.textareaBatchWords !== undefined ? elements.textareaBatchWords : get('textarea-batch-words')),
+        btnImportBatch: elements.btnImportBatch !== undefined ? elements.btnImportBatch : (elements.btnImportBatchWords !== undefined ? elements.btnImportBatchWords : get('btn-import-batch-words')),
+        colorPicker: elements.colorPicker !== undefined ? elements.colorPicker : (elements.pickerDifficultColor !== undefined ? elements.pickerDifficultColor : get('picker-difficult-color')),
+        colorSwatches: elements.colorSwatches !== undefined ? elements.colorSwatches : (elements.colorSwatchesContainer !== undefined ? elements.colorSwatchesContainer : get('color-swatches-container')),
+        btnClearHighlights: elements.btnClearHighlights !== undefined ? elements.btnClearHighlights : (elements.btnClearHighlightsBtn !== undefined ? elements.btnClearHighlightsBtn : get('btn-clear-highlights')),
+        btnClearRehearsal: elements.btnClearRehearsal !== undefined ? elements.btnClearRehearsal : (elements.btnClearRehearsalWords !== undefined ? elements.btnClearRehearsalWords : get('btn-clear-rehearsal-words')),
+        rehearsalFilterGroup: elements.rehearsalFilterGroup !== undefined ? elements.rehearsalFilterGroup : get('rehearsal-filter-group'),
+        checkboxFilterPrompter: elements.checkboxFilterPrompter !== undefined ? elements.checkboxFilterPrompter : get('checkbox-filter-prompter'),
+        difficultTagsList: elements.difficultTagsList !== undefined ? elements.difficultTagsList : get('difficult-tags-list'),
+        rehearsalTagsList: elements.rehearsalTagsList !== undefined ? elements.rehearsalTagsList : get('rehearsal-tags-list'),
+        difficultWordsCount: elements.difficultWordsCount !== undefined ? elements.difficultWordsCount : get('difficult-words-count'),
+        rehearsalWordsCount: elements.rehearsalWordsCount !== undefined ? elements.rehearsalWordsCount : get('rehearsal-words-count'),
+        previewEl: elements.previewEl !== undefined ? elements.previewEl : (elements.difficultPreviewEl !== undefined ? elements.difficultPreviewEl : get('difficult-word-preview')),
+        styleRadios: elements.styleRadios !== undefined ? elements.styleRadios : (elements.difficultStyleRadios !== undefined ? elements.difficultStyleRadios : (doc ? doc.querySelectorAll('input[name="difficult-style"]') : null)),
+        toastEl: elements.toastEl !== undefined ? elements.toastEl : (elements.difficultModalStatus !== undefined ? elements.difficultModalStatus : get('difficult-modal-status')),
+        filterCounts: elements.filterCounts || {
+          all: get('filter-count-all'),
+          skipped: get('filter-count-skipped'),
+          stumbled: get('filter-count-stumbled'),
+          repeated: get('filter-count-repeated'),
+        },
+      };
+
+      this.toastFn = typeof options.onToast === 'function' ? options.onToast : null;
+
+      if (this.elements.checkboxFilterPrompter) {
+        this.elements.checkboxFilterPrompter.checked = this.syncPrompterWithFilter;
+      }
+
+      this._initUIEventListeners();
+      this.updateUI();
+      return this;
+    }
+
+    _initUIEventListeners() {
+      const el = this.elements;
+      if (!el) return;
+
+      if (el.btnOpen) {
+        el.btnOpen.addEventListener('click', () => this.openModal());
+      }
+      if (el.btnClose) {
+        el.btnClose.addEventListener('click', () => this.closeModal());
+      }
+      if (el.btnSave) {
+        el.btnSave.addEventListener('click', () => {
+          if (el.inputWord && el.inputWord.value.trim()) {
+            this.addDifficultWord(el.inputWord.value.trim());
+            el.inputWord.value = '';
+          }
+          this.closeModal();
+        });
+      }
+      if (el.modalEl) {
+        el.modalEl.addEventListener('click', (e) => {
+          if (e.target === el.modalEl) this.closeModal();
+        });
+      }
+      if (el.btnAdd && el.inputWord) {
+        el.btnAdd.addEventListener('click', () => {
+          if (this.addDifficultWord(el.inputWord.value.trim())) {
+            this.showToast('Word added ✓');
+          }
+          el.inputWord.value = '';
+          el.inputWord.focus();
+        });
+        el.inputWord.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            if (this.addDifficultWord(el.inputWord.value.trim())) {
+              this.showToast('Word added ✓');
+            }
+            el.inputWord.value = '';
+          }
+        });
+      }
+      if (el.btnToggleBatch && el.batchContainer) {
+        el.btnToggleBatch.addEventListener('click', () => {
+          el.batchContainer.classList.toggle('hidden');
+          if (!el.batchContainer.classList.contains('hidden') && el.textareaBatch) {
+            el.textareaBatch.focus();
+          }
+        });
+      }
+      if (el.btnImportBatch && el.textareaBatch) {
+        el.btnImportBatch.addEventListener('click', () => {
+          if (this.addDifficultWord(el.textareaBatch.value)) {
+            this.showToast('Batch words imported ✓');
+          }
+          el.textareaBatch.value = '';
+          if (el.batchContainer) el.batchContainer.classList.add('hidden');
+        });
+      }
+      if (el.btnClearDifficult) {
+        el.btnClearDifficult.addEventListener('click', () => {
+          if (this.difficultWordsList.length === 0) return;
+          this.clearDifficultWords();
+          this.showToast('Cleared all words');
+        });
+      }
+      if (el.btnClearRehearsal) {
+        el.btnClearRehearsal.addEventListener('click', () => {
+          if (this.rehearsalWordsList.length === 0) return;
+          const filter = this.rehearsalFilter;
+          const removed = this.clearRehearsalWords(filter);
+          if (removed > 0) {
+            if (filter === 'all') {
+              this.showToast('Cleared rehearsal fumbles ✓');
+            } else {
+              this.showToast(`Cleared ${removed} ${filter} fumble${removed === 1 ? '' : 's'} ✓`);
+            }
+          }
+        });
+      }
+      if (el.btnClearHighlights) {
+        el.btnClearHighlights.addEventListener('click', () => {
+          if (this.rehearsalWordsList.length === 0) return;
+          const removed = this.clearRehearsalWords('all');
+          if (removed > 0) {
+            this.showToast(`Cleared ${removed} rehearsal fumble${removed === 1 ? '' : 's'} ✓`);
+          }
+        });
+      }
+      if (el.rehearsalFilterGroup) {
+        el.rehearsalFilterGroup.addEventListener('click', (e) => {
+          const btn = e.target.closest('.rehearsal-filter-btn');
+          if (!btn) return;
+          const filter = btn.getAttribute('data-filter');
+          if (filter) {
+            this.setFilter(filter);
+            this.renderRehearsalTags();
+          }
+        });
+      }
+      if (el.checkboxFilterPrompter) {
+        el.checkboxFilterPrompter.addEventListener('change', (e) => {
+          this.setSyncPrompterWithFilter(e.target.checked);
+        });
+      }
+      if (el.difficultTagsList) {
+        el.difficultTagsList.addEventListener('click', (e) => {
+          const btn = e.target.closest('.remove-btn');
+          if (!btn) return;
+          const idx = parseInt(btn.getAttribute('data-idx'), 10);
+          if (!isNaN(idx)) {
+            this.removeDifficultWord(idx);
+          }
+        });
+      }
+      if (el.rehearsalTagsList) {
+        el.rehearsalTagsList.addEventListener('click', (e) => {
+          const removeBtn = e.target.closest('.remove-btn');
+          if (removeBtn) {
+            const idx = parseInt(removeBtn.getAttribute('data-idx'), 10);
+            if (!isNaN(idx)) {
+              this.removeRehearsalWord(idx);
+              this.showToast('Fumbled word removed ✓');
+            }
+            return;
+          }
+          const keepBtn = e.target.closest('.keep-btn');
+          if (keepBtn) {
+            const idx = parseInt(keepBtn.getAttribute('data-idx'), 10);
+            if (!isNaN(idx)) {
+              this.promoteToDifficult(idx);
+              this.showToast('Saved to Configured Difficult Words ✓');
+            }
+          }
+        });
+      }
+      if (el.colorSwatches) {
+        el.colorSwatches.addEventListener('click', (e) => {
+          const swatch = e.target.closest('.color-swatch');
+          if (!swatch) return;
+          const col = swatch.getAttribute('data-color');
+          if (col) {
+            this.setColor(col);
+            this.showToast('Color updated ✓');
+          }
+        });
+      }
+      if (el.colorPicker) {
+        el.colorPicker.addEventListener('input', (e) => {
+          this.setColor(e.target.value);
+        });
+      }
+      if (el.styleRadios) {
+        el.styleRadios.forEach((radio) => {
+          radio.addEventListener('change', (e) => {
+            this.setStyle(e.target.value);
+            this.showToast('Style updated ✓');
+          });
+        });
+      }
     }
   }
 

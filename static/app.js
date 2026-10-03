@@ -10,7 +10,30 @@
       })
     : null;
 
-  const mediaSession = new TeleprompterMedia.MediaSession();
+  const initialAudioSource = configStore
+    ? (configStore.get('audio.device_id') || (configStore.get('audio.source_type') === 'browser' ? 'browser' : 'hardware'))
+    : (typeof localStorage !== 'undefined' ? localStorage.getItem('teleprompter_audio_device') || 'browser' : 'browser');
+  const initialAudioSourceName = configStore
+    ? (configStore.get('audio.device_name') || '')
+    : (typeof localStorage !== 'undefined' ? localStorage.getItem('teleprompter_audio_device_name') || '' : '');
+  const initialRecordMode = configStore
+    ? configStore.get('recording.mode')
+    : (typeof localStorage !== 'undefined' ? localStorage.getItem('teleprompter_record_mode') || 'video' : 'video');
+  const initialVideoFormat = configStore
+    ? configStore.get('recording.video_format')
+    : (typeof localStorage !== 'undefined' ? localStorage.getItem('teleprompter_video_format') || 'mp4' : 'mp4');
+  const initialAudioFormat = configStore
+    ? configStore.get('recording.audio_format')
+    : (typeof localStorage !== 'undefined' ? localStorage.getItem('teleprompter_audio_format') || 'mp3' : 'mp3');
+
+  const mediaSession = new TeleprompterMedia.MediaSession({
+    activeAudioSource: initialAudioSource,
+    activeAudioSourceName: initialAudioSourceName,
+    activeRecordMode: initialRecordMode,
+    activeVideoFormat: initialVideoFormat,
+    activeAudioFormat: initialAudioFormat,
+    configStore
+  });
   if (typeof window !== 'undefined') {
     window.mediaSession = mediaSession;
   }
@@ -31,8 +54,8 @@
   let wsConnected = false;
   let modelReady = false;
   let browserAudio = false;
-  let isRestartingServer = false;
-  let serverShutDown = false;
+  let serverControl = null;
+  let scriptEditor = null;
 
   // Browser-audio streaming state handled by mediaSession
 
@@ -45,22 +68,6 @@
   const optAutoFormatOnPaste = document.getElementById('opt-auto-format-on-paste');
   const optPersistTranscript = document.getElementById('opt-persist-transcript');
   const btnClearTranscript = document.getElementById('btn-clear-transcript');
-  const btnExpandTranscript = document.getElementById('btn-expand-transcript');
-  const modalScriptEditor = document.getElementById('modal-script-editor');
-  const modalTranscriptInput = document.getElementById('modal-transcript-input');
-  const btnCloseScriptModal = document.getElementById('btn-close-script-modal');
-  const btnModalCancel = document.getElementById('btn-modal-cancel');
-  const btnModalApply = document.getElementById('btn-modal-apply');
-  const btnModalAutoFormat = document.getElementById('btn-modal-auto-format');
-  const btnModalImportFile = document.getElementById('btn-modal-import-file');
-  const btnModalClear = document.getElementById('btn-modal-clear');
-  const modalStatWords = document.getElementById('modal-stat-words');
-  const modalStatDuration = document.getElementById('modal-stat-duration');
-  const modalStatSections = document.getElementById('modal-stat-sections');
-  const modalScriptToast = document.getElementById('modal-script-toast');
-  const btnModalFontSm = document.getElementById('btn-modal-font-sm');
-  const btnModalFontMd = document.getElementById('btn-modal-font-md');
-  const btnModalFontLg = document.getElementById('btn-modal-font-lg');
   const formatToast = document.getElementById('format-toast');
   const linesContainer = document.getElementById('lines-container');
   const scrollingContent = document.getElementById('scrolling-content');
@@ -69,6 +76,7 @@
   const btnStart = document.getElementById('btn-start');
   const btnStop = document.getElementById('btn-stop');
   const btnReset = document.getElementById('btn-reset');
+  const btnClearHighlights = document.getElementById('btn-clear-highlights');
   const vadStatus = document.getElementById('vad-status');
   const wsStatus = document.getElementById('ws-status');
   const speechHud = document.getElementById('speech-hud');
@@ -88,6 +96,46 @@
   const serverActionTitle = document.getElementById('server-action-title');
   const serverActionDesc = document.getElementById('server-action-desc');
   const serverActionFooter = document.getElementById('server-action-footer');
+
+  // Processing & take slicing progress modal elements
+  const modalProcessing = document.getElementById('modal-processing');
+  const processingProgressBar = document.getElementById('processing-progress-bar');
+  const processingPercentText = document.getElementById('processing-percent-text');
+  const processingPhaseText = document.getElementById('processing-phase-text');
+  const processingTimeRemaining = document.getElementById('processing-time-remaining');
+
+  let processingStartTime = 0;
+
+  function showProcessingModal() {
+    processingStartTime = Date.now();
+    if (processingProgressBar) processingProgressBar.style.width = '5%';
+    if (processingPercentText) processingPercentText.textContent = '5%';
+    if (processingPhaseText) processingPhaseText.textContent = 'Preparing audio recording…';
+    if (processingTimeRemaining) processingTimeRemaining.textContent = 'Estimating time…';
+    if (modalProcessing) {
+      modalProcessing.classList.remove('hidden');
+    }
+  }
+
+  function hideProcessingModal() {
+    if (modalProcessing) {
+      modalProcessing.classList.add('hidden');
+    }
+  }
+
+  function updateProcessingModal({ percent, phase, timeRemaining } = {}) {
+    if (percent !== undefined && processingProgressBar) {
+      const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+      processingProgressBar.style.width = `${clamped}%`;
+      if (processingPercentText) processingPercentText.textContent = `${clamped}%`;
+    }
+    if (phase && processingPhaseText) {
+      processingPhaseText.textContent = phase;
+    }
+    if (timeRemaining !== undefined && processingTimeRemaining) {
+      processingTimeRemaining.textContent = timeRemaining;
+    }
+  }
 
 
   let retakeHotkey = (configStore && configStore.get('ui.retake_hotkey')) || 'r';
@@ -109,7 +157,7 @@
   };
   mediaSession.onAudioChunk = (pcm16k) => {
     if (!isPrompting || !ws || ws.readyState !== WebSocket.OPEN) return;
-    if (activeAudioSource !== 'browser') return;
+    if (mediaSession.activeAudioSource !== 'browser') return;
     send({ type: 'audio', data: Array.from(pcm16k) });
   };
   mediaSession.onDeviceChanged = (label) => {
@@ -131,8 +179,8 @@
   }
 
   let persistTranscript = configStore
-    ? configStore.get('ui.persist_transcript')
-    : (localStorage.getItem('teleprompter_persist_transcript') !== 'false');
+    ? (configStore.get('ui.persist_transcript') !== false)
+    : (typeof localStorage !== 'undefined' ? localStorage.getItem('teleprompter_persist_transcript') !== 'false' : true);
   if (optPersistTranscript) {
     optPersistTranscript.checked = persistTranscript;
     optPersistTranscript.addEventListener('change', (e) => {
@@ -155,9 +203,15 @@
 
   function saveTranscriptIfEnabled() {
     if (persistTranscript) {
-      if (transcriptInput && transcriptInput.value && transcriptInput.value.trim()) {
-        if (configStore) configStore.set('script.saved_transcript', transcriptInput.value);
-        localStorage.setItem('teleprompter_saved_transcript', transcriptInput.value);
+      const activeText = (transcriptInput && transcriptInput.value)
+        || (scriptEditor && scriptEditor.modalInput && scriptEditor.modalInput.value)
+        || '';
+      if (activeText && activeText.trim()) {
+        if (transcriptInput && transcriptInput.value !== activeText) {
+          transcriptInput.value = activeText;
+        }
+        if (configStore) configStore.set('script.saved_transcript', activeText);
+        localStorage.setItem('teleprompter_saved_transcript', activeText);
       } else {
         if (configStore) configStore.set('script.saved_transcript', '');
         localStorage.removeItem('teleprompter_saved_transcript');
@@ -182,9 +236,8 @@
         if (!confirm('Are you sure you want to clear the transcript?')) return;
       }
       transcriptInput.value = '';
-      if (modalTranscriptInput) {
-        modalTranscriptInput.value = '';
-        if (typeof updateModalStats === 'function') updateModalStats();
+      if (scriptEditor) {
+        scriptEditor.syncFromSource();
       }
       if (persistTranscript) {
         if (configStore) configStore.set('script.saved_transcript', '');
@@ -198,21 +251,30 @@
   }
 
   window.addEventListener('beforeunload', () => {
-    if (persistTranscript && transcriptInput && transcriptInput.value && transcriptInput.value.trim()) {
-      if (configStore) configStore.set('script.saved_transcript', transcriptInput.value);
-      localStorage.setItem('teleprompter_saved_transcript', transcriptInput.value);
+    if (persistTranscript) {
+      const activeText = (transcriptInput && transcriptInput.value)
+        || (scriptEditor && scriptEditor.modalInput && scriptEditor.modalInput.value)
+        || '';
+      if (activeText && activeText.trim()) {
+        if (configStore) configStore.set('script.saved_transcript', activeText);
+        localStorage.setItem('teleprompter_saved_transcript', activeText);
+      }
     }
   });
 
-  function showFormatToast(msg = 'Formatted ✓') {
-    if (!formatToast) return;
-    formatToast.textContent = msg;
-    formatToast.classList.remove('opacity-0');
-    formatToast.classList.add('opacity-100');
+  function showToast(el, msg, durationMs = 2000) {
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.remove('opacity-0');
+    el.classList.add('opacity-100');
     setTimeout(() => {
-      formatToast.classList.remove('opacity-100');
-      formatToast.classList.add('opacity-0');
-    }, 2000);
+      el.classList.remove('opacity-100');
+      el.classList.add('opacity-0');
+    }, durationMs);
+  }
+
+  function showFormatToast(msg = 'Formatted ✓') {
+    showToast(formatToast, msg, 2000);
   }
 
   const optOpacity = document.getElementById('opt-opacity');
@@ -235,15 +297,6 @@
   const optAudioSource = document.getElementById('opt-audio-source');
   const audioSourceBadge = document.getElementById('audio-source-badge');
   const audioSourceDesc = document.getElementById('audio-source-desc');
-  let activeAudioSource = configStore
-    ? (configStore.get('audio.device_id') || (configStore.get('audio.source_type') === 'browser' ? 'browser' : 'hardware'))
-    : (localStorage.getItem('teleprompter_audio_device') || 'browser');
-  let activeAudioSourceName = configStore
-    ? (configStore.get('audio.device_name') || '')
-    : (localStorage.getItem('teleprompter_audio_device_name') || '');
-  let availableAudioDevices = [];
-  let analyserSource = null;
-  let lastLocalLevelTime = 0;
 
   const ENGINE_DESCRIPTIONS = {
     ultrafast: '0.4s interval, tiny.en model (lowest latency, snappiest)',
@@ -290,316 +343,26 @@
     configStore: configStore,
     storage: typeof localStorage !== 'undefined' ? localStorage : null,
     onChange: () => {
-      updateCuesUI();
       if (allWords && allWords.length > 0) {
         parseAndRenderTranscript();
       }
     },
   });
+  cues.bindUI();
 
-  const diffCountBadge = document.getElementById('difficult-count-badge');
-  const modalDifficultWords = document.getElementById('modal-difficult-words');
-  const btnOpenDifficultWords = document.getElementById('btn-open-difficult-words');
-  const btnCloseDifficultWords = document.getElementById('btn-close-difficult-words');
-  const btnSaveDifficultWords = document.getElementById('btn-save-difficult-words');
-  const inputDifficultWord = document.getElementById('input-difficult-word');
-  const btnAddDifficultWord = document.getElementById('btn-add-difficult-word');
-  const btnClearDifficultWords = document.getElementById('btn-clear-difficult-words');
-  const btnToggleBatchWords = document.getElementById('btn-toggle-batch-words');
-  const batchWordsContainer = document.getElementById('batch-words-container');
-  const textareaBatchWords = document.getElementById('textarea-batch-words');
-  const btnImportBatchWords = document.getElementById('btn-import-batch-words');
-  const pickerDifficultColor = document.getElementById('picker-difficult-color');
-  const colorSwatchesContainer = document.getElementById('color-swatches-container');
-  const btnClearRehearsalWords = document.getElementById('btn-clear-rehearsal-words');
-  const rehearsalFilterGroup = document.getElementById('rehearsal-filter-group');
-  const checkboxFilterPrompter = document.getElementById('checkbox-filter-prompter');
-  const difficultTagsList = document.getElementById('difficult-tags-list');
-  const rehearsalTagsList = document.getElementById('rehearsal-tags-list');
-  const difficultWordsCount = document.getElementById('difficult-words-count');
-  const rehearsalWordsCount = document.getElementById('rehearsal-words-count');
-  const difficultPreviewEl = document.getElementById('difficult-word-preview');
-  const difficultStyleRadios = document.querySelectorAll('input[name="difficult-style"]');
-
-  const filterCounts = {
-    all: document.getElementById('filter-count-all'),
-    skipped: document.getElementById('filter-count-skipped'),
-    stumbled: document.getElementById('filter-count-stumbled'),
-    repeated: document.getElementById('filter-count-repeated'),
-  };
-
-  function showModalStatus(msg = 'Saved & Applied ✓') {
-    const statusEl = document.getElementById('difficult-modal-status');
-    if (!statusEl) return;
-    statusEl.textContent = msg;
-    statusEl.classList.remove('opacity-0');
-    statusEl.classList.add('opacity-100');
-    setTimeout(() => {
-      statusEl.classList.remove('opacity-100');
-      statusEl.classList.add('opacity-0');
-    }, 1800);
-  }
-
-  function applyDifficultColorStyles() {
-    cues.applyColorStyles(difficultPreviewEl, colorSwatchesContainer, pickerDifficultColor, difficultStyleRadios);
-    cues.updateCountBadge(diffCountBadge);
-  }
-
-  function renderDifficultTags() {
-    cues.renderDifficultTags(difficultTagsList, difficultWordsCount);
-    cues.updateCountBadge(diffCountBadge);
-  }
-
-  function renderRehearsalTags() {
-    cues.renderRehearsalTags(rehearsalTagsList, rehearsalWordsCount, filterCounts, rehearsalFilterGroup, btnClearRehearsalWords);
-    cues.updateCountBadge(diffCountBadge);
-  }
-
-  function updateCuesUI() {
-    applyDifficultColorStyles();
-    renderDifficultTags();
-    renderRehearsalTags();
-  }
-
-  function openDifficultWordsModal() {
-    if (!modalDifficultWords) return;
-    updateCuesUI();
-    modalDifficultWords.classList.remove('hidden');
-    if (inputDifficultWord) {
-      setTimeout(() => inputDifficultWord.focus(), 50);
-    }
-  }
-
-  function closeDifficultWordsModal() {
-    if (!modalDifficultWords) return;
-    modalDifficultWords.classList.add('hidden');
-    if (batchWordsContainer) batchWordsContainer.classList.add('hidden');
-    if (inputDifficultWord) inputDifficultWord.value = '';
-    if (textareaBatchWords) textareaBatchWords.value = '';
-  }
-
-  if (btnOpenDifficultWords) {
-    btnOpenDifficultWords.addEventListener('click', openDifficultWordsModal);
-  }
-  if (btnCloseDifficultWords) {
-    btnCloseDifficultWords.addEventListener('click', closeDifficultWordsModal);
-  }
-  if (btnSaveDifficultWords) {
-    btnSaveDifficultWords.addEventListener('click', () => {
-      if (inputDifficultWord && inputDifficultWord.value.trim()) {
-        cues.addDifficultWord(inputDifficultWord.value.trim());
-        inputDifficultWord.value = '';
-      }
-      closeDifficultWordsModal();
-    });
-  }
-
-  if (modalDifficultWords) {
-    modalDifficultWords.addEventListener('click', (e) => {
-      if (e.target === modalDifficultWords) closeDifficultWordsModal();
-    });
-  }
-
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && modalDifficultWords && !modalDifficultWords.classList.contains('hidden')) {
-      closeDifficultWordsModal();
-    }
-  });
-
-  if (btnAddDifficultWord && inputDifficultWord) {
-    btnAddDifficultWord.addEventListener('click', () => {
-      if (cues.addDifficultWord(inputDifficultWord.value.trim())) {
-        showModalStatus('Word added ✓');
-      }
-      inputDifficultWord.value = '';
-      inputDifficultWord.focus();
-    });
-    inputDifficultWord.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        if (cues.addDifficultWord(inputDifficultWord.value.trim())) {
-          showModalStatus('Word added ✓');
-        }
-        inputDifficultWord.value = '';
-      }
-    });
-  }
-
-  if (btnToggleBatchWords && batchWordsContainer) {
-    btnToggleBatchWords.addEventListener('click', () => {
-      batchWordsContainer.classList.toggle('hidden');
-      if (!batchWordsContainer.classList.contains('hidden') && textareaBatchWords) {
-        textareaBatchWords.focus();
-      }
-    });
-  }
-
-  if (btnImportBatchWords && textareaBatchWords) {
-    btnImportBatchWords.addEventListener('click', () => {
-      if (cues.addDifficultWord(textareaBatchWords.value)) {
-        showModalStatus('Batch words imported ✓');
-      }
-      textareaBatchWords.value = '';
-      batchWordsContainer.classList.add('hidden');
-    });
-  }
-
-  if (btnClearDifficultWords) {
-    btnClearDifficultWords.addEventListener('click', () => {
-      if (cues.difficultWordsList.length === 0) return;
-      cues.clearDifficultWords();
-      showModalStatus('Cleared all words');
-    });
-  }
-
-  if (btnClearRehearsalWords) {
-    btnClearRehearsalWords.addEventListener('click', () => {
-      if (cues.rehearsalWordsList.length === 0) return;
-      const filter = cues.rehearsalFilter;
-      const removed = cues.clearRehearsalWords(filter);
-      if (removed > 0) {
-        if (filter === 'all') {
-          showModalStatus('Cleared rehearsal fumbles ✓');
-        } else {
-          showModalStatus(`Cleared ${removed} ${filter} fumble${removed === 1 ? '' : 's'} ✓`);
-        }
-      }
-    });
-  }
-
-  if (rehearsalFilterGroup) {
-    rehearsalFilterGroup.addEventListener('click', (e) => {
-      const btn = e.target.closest('.rehearsal-filter-btn');
-      if (!btn) return;
-      const filter = btn.getAttribute('data-filter');
-      if (filter) {
-        cues.setFilter(filter);
-        renderRehearsalTags();
-      }
-    });
-  }
-
-  if (checkboxFilterPrompter) {
-    checkboxFilterPrompter.checked = cues.syncPrompterWithFilter;
-    checkboxFilterPrompter.addEventListener('change', (e) => {
-      cues.setSyncPrompterWithFilter(e.target.checked);
-    });
-  }
-
-  if (difficultTagsList) {
-    difficultTagsList.addEventListener('click', (e) => {
-      const btn = e.target.closest('.remove-btn');
-      if (!btn) return;
-      const idx = parseInt(btn.getAttribute('data-idx'), 10);
-      if (!isNaN(idx)) {
-        cues.removeDifficultWord(idx);
-      }
-    });
-  }
-
-  if (rehearsalTagsList) {
-    rehearsalTagsList.addEventListener('click', (e) => {
-      const removeBtn = e.target.closest('.remove-btn');
-      if (removeBtn) {
-        const idx = parseInt(removeBtn.getAttribute('data-idx'), 10);
-        if (!isNaN(idx)) {
-          cues.removeRehearsalWord(idx);
-          showModalStatus('Fumbled word removed ✓');
-        }
-        return;
-      }
-      const keepBtn = e.target.closest('.keep-btn');
-      if (keepBtn) {
-        const idx = parseInt(keepBtn.getAttribute('data-idx'), 10);
-        if (!isNaN(idx)) {
-          cues.promoteToDifficult(idx);
-          showModalStatus('Saved to Configured Difficult Words ✓');
-        }
-      }
-    });
-  }
-
-  if (colorSwatchesContainer) {
-    colorSwatchesContainer.addEventListener('click', (e) => {
-      const swatch = e.target.closest('.color-swatch');
-      if (!swatch) return;
-      const col = swatch.getAttribute('data-color');
-      if (col) {
-        cues.setColor(col);
-        showModalStatus('Color updated ✓');
-      }
-    });
-  }
-
-  if (pickerDifficultColor) {
-    pickerDifficultColor.addEventListener('input', (e) => {
-      cues.setColor(e.target.value);
-    });
-  }
-
-  difficultStyleRadios.forEach((radio) => {
-    radio.addEventListener('change', (e) => {
-      cues.setStyle(e.target.value);
-      showModalStatus('Style updated ✓');
-    });
-  });
-
-  // ---- Audio Source Selection (Browser WebRTC vs Hardware Mic) -------------
-  function updateAudioSourceUI(deviceId, devicesList) {
-    if (devicesList && devicesList.length) {
-      availableAudioDevices = devicesList;
-      if (optAudioSource) {
-        optAudioSource.innerHTML = '';
-        devicesList.forEach((d) => {
-          const opt = document.createElement('option');
-          opt.value = d.id;
-          opt.textContent = d.name;
-          if (d.raw_name) opt.dataset.rawName = d.raw_name;
-          if (String(d.id) === String(deviceId)) opt.selected = true;
-          optAudioSource.appendChild(opt);
-        });
-      }
-    }
-    activeAudioSource = String(deviceId);
-    if (optAudioSource) {
-      optAudioSource.value = activeAudioSource;
-    }
-    const matchedDev = availableAudioDevices.find((d) => String(d.id) === String(activeAudioSource));
-    if (matchedDev && (matchedDev.raw_name || matchedDev.name)) {
-      activeAudioSourceName = matchedDev.raw_name || matchedDev.name;
-      localStorage.setItem('teleprompter_audio_device_name', activeAudioSourceName);
-    }
-    const isBrowser = activeAudioSource === 'browser';
-    if (audioSourceBadge) {
-      const devName = matchedDev ? (matchedDev.raw_name || matchedDev.name).replace(/\s*\(System Default\)\s*/i, '') : '';
-      audioSourceBadge.textContent = isBrowser ? 'Browser Mic' : (devName || 'Hardware Mic');
-      audioSourceBadge.className = 'text-[10px] px-1.5 py-0.5 rounded font-mono border ' +
-        (isBrowser ? 'bg-green-950 text-green-300 border-green-700/50' : 'bg-indigo-950 text-indigo-300 border-indigo-700/50');
-    }
-    if (audioSourceDesc) {
-      const devName = matchedDev ? (matchedDev.raw_name || matchedDev.name).replace(/\s*\(System Default\)\s*/i, '') : 'selected mic';
-      audioSourceDesc.textContent = isBrowser
-        ? 'Streams directly from your active browser tab mic (matches VU meter).'
-        : `Backend captures directly from ${devName} for Whisper. Browser records & monitors ${devName}.`;
-    }
-    if (vuSource) {
-      const devName = matchedDev ? (matchedDev.raw_name || matchedDev.name).replace(/\s*\(System Default\)\s*/i, '') : (isBrowser ? 'Browser' : 'Mic');
-      vuSource.textContent = devName;
-    }
-  }
-
-  if (optAudioSource) {
-    optAudioSource.addEventListener('change', async (e) => {
-      const devId = e.target.value;
-      activeAudioSource = devId;
-      localStorage.setItem('teleprompter_audio_device', devId);
-      const matchedDev = availableAudioDevices.find((d) => String(d.id) === String(devId));
-      const targetName = matchedDev ? (matchedDev.raw_name || matchedDev.name) : null;
-      if (targetName) {
-        activeAudioSourceName = targetName;
-        localStorage.setItem('teleprompter_audio_device_name', targetName);
-      }
-      updateAudioSourceUI(devId);
+  // ---- Audio Source Selection & Recording Mode / Format UI (Delegated to MediaSession) ----
+  mediaSession.bindUI({
+    optAudioSource,
+    audioSourceBadge,
+    audioSourceDesc,
+    vuSource,
+    btnRefreshAudioDevices,
+    optRecordMode,
+    optRecordFormat,
+    recordingFormatGroup,
+    formatDesc
+  }, {
+    onDeviceSelect: async (devId, targetName) => {
       send({ type: 'set_audio_device', device: devId });
       await switchBrowserAudio(targetName);
       if (devId === 'browser') {
@@ -607,106 +370,15 @@
       } else {
         stopBrowserAudioStream();
       }
-    });
-  }
-
-  if (btnRefreshAudioDevices) {
-    btnRefreshAudioDevices.addEventListener('click', async () => {
-      btnRefreshAudioDevices.classList.add('opacity-50');
+    },
+    onRefreshDevices: async () => {
       send({ type: 'refresh_audio_devices' });
-      await switchBrowserAudio(activeAudioSourceName);
-      setTimeout(() => btnRefreshAudioDevices.classList.remove('opacity-50'), 400);
-    });
-  }
-
-  // ---- Audio & Video Format Configuration ----------------------------------
-  const VIDEO_FORMATS = [
-    { id: 'mp4', label: 'MP4 (.mp4)', desc: 'Universal MP4 video format (H.264/AAC)' },
-    { id: 'webm', label: 'WebM (.webm)', desc: 'High-efficiency WebM video format (VP9/Opus)' },
-  ];
-
-  const AUDIO_FORMATS = [
-    { id: 'mp3', label: 'MP3 (.mp3)', desc: 'Universal compressed MP3 audio (192 kbps)' },
-    { id: 'wav', label: 'WAV (.wav)', desc: 'Lossless 16-bit PCM WAV (studio quality, uncompressed)' },
-    { id: 'webm', label: 'WebM (.webm)', desc: 'WebM Opus compressed audio' },
-  ];
-
-  let activeRecordMode = configStore ? configStore.get('recording.mode') : (localStorage.getItem('teleprompter_record_mode') || 'video');
-  if (optRecordMode) optRecordMode.value = activeRecordMode;
-
-  let activeVideoFormat = configStore ? configStore.get('recording.video_format') : (localStorage.getItem('teleprompter_video_format') || 'mp4');
-  let activeAudioFormat = configStore ? configStore.get('recording.audio_format') : (localStorage.getItem('teleprompter_audio_format') || 'mp3');
-  let activeRecordingOptions = { mimeType: '', extension: 'webm', format: 'webm' };
-
-  function updateFormatUI() {
-    const mode = optRecordMode ? optRecordMode.value : 'video';
-    activeRecordMode = mode;
-    if (configStore) {
-      configStore.update('recording', {
-        mode: activeRecordMode,
-        video_format: activeVideoFormat,
-        audio_format: activeAudioFormat
-      });
-    }
-    localStorage.setItem('teleprompter_record_mode', mode);
-
-    if (mode === 'off') {
-      if (recordingFormatGroup) recordingFormatGroup.classList.add('hidden');
-    } else {
-      if (recordingFormatGroup) recordingFormatGroup.classList.remove('hidden');
-      if (optRecordFormat) {
-        optRecordFormat.innerHTML = '';
-        const formats = mode === 'video' ? VIDEO_FORMATS : AUDIO_FORMATS;
-        const currentSelected = mode === 'video' ? activeVideoFormat : activeAudioFormat;
-        formats.forEach((f) => {
-          const opt = document.createElement('option');
-          opt.value = f.id;
-          opt.textContent = f.label;
-          if (f.id === currentSelected) opt.selected = true;
-          optRecordFormat.appendChild(opt);
-        });
-        const chosen = formats.find((f) => f.id === optRecordFormat.value) || formats[0];
-        if (formatDesc) formatDesc.textContent = chosen ? chosen.desc : '';
-      }
-    }
-    updateStopButtonText();
-  }
-
-  if (optRecordMode) {
-    optRecordMode.addEventListener('change', updateFormatUI);
-  }
-
-  if (optRecordFormat) {
-    optRecordFormat.addEventListener('change', (e) => {
-      const mode = optRecordMode ? optRecordMode.value : 'video';
-      if (mode === 'video') {
-        activeVideoFormat = e.target.value;
-        localStorage.setItem('teleprompter_video_format', activeVideoFormat);
-      } else {
-        activeAudioFormat = e.target.value;
-        localStorage.setItem('teleprompter_audio_format', activeAudioFormat);
-      }
-      if (configStore) {
-        configStore.update('recording', {
-          mode: activeRecordMode,
-          video_format: activeVideoFormat,
-          audio_format: activeAudioFormat
-        });
-      }
-      const formats = mode === 'video' ? VIDEO_FORMATS : AUDIO_FORMATS;
-      const chosen = formats.find((f) => f.id === e.target.value);
-      if (formatDesc && chosen) formatDesc.textContent = chosen.desc;
+      await switchBrowserAudio(mediaSession.activeAudioSourceName);
+    },
+    onFormatChange: () => {
       updateStopButtonText();
-    });
-  }
-
-  // ---- Audio Encoders & Recorder Options (Delegated to TeleprompterMedia) ----
-  const {
-    audioBufferToWav,
-    audioBufferToMp3,
-    getAudioRecorderOptions,
-    getVideoRecorderOptions
-  } = TeleprompterMedia;
+    }
+  });
 
   function updateStopButtonText() {
     if (!btnStop) return;
@@ -717,12 +389,12 @@
       return;
     }
     btnStop.className = 'px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded shadow transition cursor-pointer' + (isHidden ? ' hidden' : '');
-    const mode = optRecordMode ? optRecordMode.value : 'video';
+    const mode = mediaSession.activeRecordMode || 'video';
     if (mode === 'audio') {
-      const fmt = (activeAudioFormat || 'mp3').toUpperCase();
+      const fmt = (mediaSession.activeAudioFormat || 'mp3').toUpperCase();
       btnStop.textContent = `Stop & Save Audio (${fmt})`;
     } else if (mode === 'video') {
-      const fmt = (activeVideoFormat || 'mp4').toUpperCase();
+      const fmt = (mediaSession.activeVideoFormat || 'mp4').toUpperCase();
       btnStop.textContent = `Stop & Save Video (${fmt})`;
     } else {
       btnStop.textContent = 'Stop Session';
@@ -743,10 +415,8 @@
         serverStatusPill.textContent = 'Online';
         serverStatusPill.className = 'text-[10px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 font-mono border border-emerald-700/50';
       }
-      if (isRestartingServer) {
-        isRestartingServer = false;
-        closeServerActionModal();
-        showFormatToast('Server reconnected ✓');
+      if (serverControl && serverControl.isRestarting) {
+        serverControl.handleReconnected();
       }
       const savedEngine = localStorage.getItem('teleprompter_engine_speed');
       if (savedEngine) {
@@ -757,17 +427,19 @@
     ws.onclose = () => {
       wsConnected = false;
       updateStartButton();
+      const isOffline = serverControl ? serverControl.isShutDown : false;
+      const isRestarting = serverControl ? serverControl.isRestarting : false;
       if (serverStatusPill) {
-        serverStatusPill.textContent = serverShutDown ? 'Offline' : (isRestartingServer ? 'Restarting' : 'Reconnecting');
-        serverStatusPill.className = serverShutDown
+        serverStatusPill.textContent = isOffline ? 'Offline' : (isRestarting ? 'Restarting' : 'Reconnecting');
+        serverStatusPill.className = isOffline
           ? 'text-[10px] px-1.5 py-0.5 rounded bg-red-950 text-red-400 font-mono border border-red-700/50'
           : 'text-[10px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-400 font-mono border border-amber-700/50';
       }
-      if (serverShutDown) {
+      if (isOffline) {
         setBadge(wsStatus, 'offline', 'bg-red-950 text-red-400 border-red-500/30');
         return;
       }
-      setBadge(wsStatus, isRestartingServer ? 'restarting…' : 'reconnecting…', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
+      setBadge(wsStatus, isRestarting ? 'restarting…' : 'reconnecting…', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
       setTimeout(connect, 1500);
     };
     ws.onmessage = (ev) => {
@@ -777,12 +449,110 @@
     };
   }
 
+  // ---- Post-recording boundary refinement ----------------------------------
+  // After Stop, the decoded recording is sent to the server, which transcribes the
+  // whole file (word timestamps) and reports when each script section was really
+  // spoken. Resolves to a { sectionId: {startSec,endSec}|null } map, or null on any
+  // failure/timeout so the caller keeps the live-tracked boundaries.
+  const pendingRefines = new Map();
+
+  function requestRefinedBoundaries(audioBuffer, sections, onRefineProgress) {
+    return new Promise((resolve) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN || !audioBuffer || !sections || sections.length === 0) {
+        return resolve(null);
+      }
+      const reqId = 'refine-' + Date.now();
+      const durationSec = audioBuffer.duration || 0;
+      // Generous but bounded: long takes need longer to transcribe on CPU.
+      const timeoutMs = Math.min(600, Math.max(60, durationSec * 2)) * 1000;
+      const timer = setTimeout(() => {
+        pendingRefines.delete(reqId);
+        console.warn('[REFINE] Timed out waiting for server; using live boundaries.');
+        resolve(null);
+      }, timeoutMs);
+
+      const entry = {
+        resolve: (msg) => {
+          clearTimeout(timer);
+          pendingRefines.delete(reqId);
+          resolve(msg && msg.ok ? msg.boundaries : null);
+        },
+        onProgress: (msg) => {
+          if (typeof onRefineProgress === 'function') {
+            onRefineProgress(msg);
+          }
+        }
+      };
+      pendingRefines.set(reqId, entry);
+
+      try {
+        const pcm = TeleprompterMedia.audioBufferToPcm16k(audioBuffer);
+        const CHUNK_SAMPLES = 150000; // ~300 KB raw, ~400 KB base64: under the 2 MB limit
+        let seq = 0;
+        for (let off = 0; off < pcm.length; off += CHUNK_SAMPLES) {
+          const bytes = new Uint8Array(pcm.buffer, pcm.byteOffset + off * 2,
+            Math.min(CHUNK_SAMPLES, pcm.length - off) * 2);
+          let bin = '';
+          for (let i = 0; i < bytes.length; i += 0x8000) {
+            bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+          }
+          // "type" first: the server recognises refine messages from the start of the frame.
+          ws.send(JSON.stringify({ type: 'refine_chunk', id: reqId, seq: seq++, data: btoa(bin) }));
+        }
+        const sectionTexts = sections.map((s) => ({
+          id: s.id,
+          text: allWords.filter((w) => w.sectionId === s.id).map((w) => w.original).join(' '),
+        }));
+        ws.send(JSON.stringify({ type: 'refine_end', id: reqId, sections: sectionTexts }));
+      } catch (err) {
+        console.warn('[REFINE] Upload failed:', err);
+        clearTimeout(timer);
+        pendingRefines.delete(reqId);
+        resolve(null);
+      }
+    });
+  }
+
   function handleMessage(msg) {
     switch (msg.type) {
+      case 'refine_progress': {
+        const entry = pendingRefines.get(msg.id);
+        if (entry && typeof entry.onProgress === 'function') {
+          entry.onProgress(msg);
+        }
+        break;
+      }
+      case 'refine_result': {
+        const entry = pendingRefines.get(msg.id);
+        if (entry) {
+          if (typeof entry === 'function') entry(msg);
+          else if (typeof entry.resolve === 'function') entry.resolve(msg);
+        }
+        break;
+      }
       case 'config':
         browserAudio = !!msg.browser_audio;
         if (msg.config && configStore) {
           configStore.reconcileServerConfig(msg.config);
+          const activeClientText = (transcriptInput && transcriptInput.value && transcriptInput.value.trim())
+            || (scriptEditor && scriptEditor.modalInput && scriptEditor.modalInput.value && scriptEditor.modalInput.value.trim())
+            || '';
+
+          if (persistTranscript && !activeClientText) {
+            const recovered = configStore.get('script.saved_transcript');
+            if (recovered && recovered.trim()) {
+              transcriptInput.value = recovered;
+              if (scriptEditor) scriptEditor.syncFromSource();
+              updateClearButtonVisibility();
+              parseAndRenderTranscript();
+              updateStartButton();
+            }
+          } else if (persistTranscript && activeClientText) {
+            const serverScript = msg.config.script && msg.config.script.saved_transcript;
+            if (serverScript !== activeClientText) {
+              send({ type: 'config_patch', domain: 'script', data: { saved_transcript: activeClientText } });
+            }
+          }
         }
         if (msg.profile) {
           const saved = configStore ? configStore.get('engine.profile') : localStorage.getItem('teleprompter_engine_speed');
@@ -791,11 +561,11 @@
         if (msg.audio_devices) {
           const savedDev = configStore ? configStore.get('audio.device_id') : localStorage.getItem('teleprompter_audio_device');
           const activeDev = savedDev || (msg.browser_audio ? 'browser' : msg.active_audio_device) || 'browser';
-          updateAudioSourceUI(activeDev, msg.audio_devices);
+          mediaSession.updateAudioSourceUI(activeDev, msg.audio_devices);
           const matchedDev = (msg.audio_devices || []).find((d) => String(d.id) === String(activeDev));
-          const targetName = matchedDev ? (matchedDev.raw_name || matchedDev.name) : activeAudioSourceName;
+          const targetName = matchedDev ? (matchedDev.raw_name || matchedDev.name) : mediaSession.activeAudioSourceName;
           if (targetName) {
-            activeAudioSourceName = targetName;
+            mediaSession.activeAudioSourceName = targetName;
             if (configStore) {
               configStore.update('audio', {
                 source_type: activeDev === 'browser' ? 'browser' : 'hardware',
@@ -810,7 +580,7 @@
             send({ type: 'set_audio_device', device: savedDev });
           }
         }
-        if (activeAudioSource === 'browser' && isPrompting) {
+        if (mediaSession.activeAudioSource === 'browser' && isPrompting) {
           mediaSession.ensureAudioContext().then(() => startBrowserAudioStream()).catch(() => {});
         }
         break;
@@ -833,17 +603,17 @@
           console.log('[AUDIO] Ignoring background audio_device_changed event while session is active');
           break;
         }
-        updateAudioSourceUI(msg.device);
-        const switchedDev = availableAudioDevices.find((d) => String(d.id) === String(msg.device));
+        mediaSession.updateAudioSourceUI(msg.device);
+        const switchedDev = mediaSession.availableAudioDevices.find((d) => String(d.id) === String(msg.device));
         if (switchedDev) {
           const tName = switchedDev.raw_name || switchedDev.name;
-          activeAudioSourceName = tName;
+          mediaSession.activeAudioSourceName = tName;
           localStorage.setItem('teleprompter_audio_device_name', tName);
           switchBrowserAudio(tName);
         }
         break;
       case 'vu':
-        if (Date.now() - lastLocalLevelTime > 150) {
+        if (Date.now() - mediaSession.lastLocalLevelTime > 150) {
           renderVuLevel(msg.level);
         }
         break;
@@ -872,12 +642,8 @@
         });
         break;
       case 'server_stopping':
-        if (msg.action === 'restart') {
-          isRestartingServer = true;
-          showServerRestartingState();
-        } else if (msg.action === 'shutdown') {
-          serverShutDown = true;
-          showServerShutdownState();
+        if (serverControl) {
+          serverControl.handleServerStopping(msg.action);
         }
         break;
       case 'error':
@@ -900,7 +666,7 @@
         }
       }
     });
-    renderRehearsalTags();
+    cues.renderRehearsalTags();
   }
 
   function onRehearsalSummary(msg) {
@@ -913,8 +679,8 @@
     if (msg.profile) {
       updateEngineUI(msg.profile);
     }
-    if (msg.active_audio_device && !availableAudioDevices.length) {
-      updateAudioSourceUI(msg.active_audio_device);
+    if (msg.active_audio_device && !mediaSession.availableAudioDevices.length) {
+      mediaSession.updateAudioSourceUI(msg.active_audio_device);
     }
     if (msg.mic_warning === true) {
       setBadge(vadStatus, 'MIC SILENT', 'bg-red-950 text-red-400 border-red-500/30 animate-pulse');
@@ -937,7 +703,7 @@
     }
     if (msg.running === false && !isPrompting) {
       if (vadStatus.textContent !== 'SAVED' && !vadStatus.textContent.includes('SAVED') && vadStatus.textContent !== 'ENCODING…') {
-        if (activeRecordMode === 'off' || !mediaSession.mediaRecorder || mediaSession.mediaRecorder.state === 'inactive') {
+        if (mediaSession.activeRecordMode === 'off' || !mediaSession.mediaRecorder || mediaSession.mediaRecorder.state === 'inactive') {
           speechHud.textContent = 'Session ended.';
         }
       }
@@ -1026,7 +792,7 @@
       if (activeLabel && vuSource) {
         vuSource.textContent = activeLabel.replace(/\s*\(System Default\)\s*/i, '');
       }
-      if (activeAudioSource === 'browser' && isPrompting) {
+      if (mediaSession.activeAudioSource === 'browser' && isPrompting) {
         stopBrowserAudioStream();
         startBrowserAudioStream();
       }
@@ -1036,7 +802,7 @@
   }
 
   async function initAudio() {
-    const target = activeAudioSourceName || (activeAudioSource !== 'browser' ? activeAudioSource : null);
+    const target = mediaSession.activeAudioSourceName || (mediaSession.activeAudioSource !== 'browser' ? mediaSession.activeAudioSource : null);
     await mediaSession.initAudio(target);
   }
 
@@ -1076,7 +842,7 @@
 
   // ---- Browser-audio streaming (WebRTC audio to WebSocket) ------------------
   function startBrowserAudioStream() {
-    if (activeAudioSource !== 'browser') return;
+    if (mediaSession.activeAudioSource !== 'browser') return;
     mediaSession.startStreaming();
     send({ type: 'set_audio_device', device: 'browser' });
   }
@@ -1189,7 +955,12 @@
   transcriptInput.addEventListener('paste', () => {
     if (!autoFormatOnPaste) {
       setTimeout(() => {
+        if (scriptEditor) {
+          scriptEditor.syncFromSource();
+        }
         saveTranscriptIfEnabled();
+        parseAndRenderTranscript();
+        updateStartButton();
       }, 0);
       return;
     }
@@ -1197,6 +968,9 @@
       if (!transcriptInput.value.trim()) return;
       const formatted = formatScriptForPrompter(transcriptInput.value);
       transcriptInput.value = formatted;
+      if (scriptEditor) {
+        scriptEditor.syncFromSource();
+      }
       saveTranscriptIfEnabled();
       parseAndRenderTranscript();
       updateStartButton();
@@ -1237,9 +1011,8 @@
       } else {
         transcriptInput.value = rawText;
       }
-      if (modalTranscriptInput) {
-        modalTranscriptInput.value = transcriptInput.value;
-        if (typeof updateModalStats === 'function') updateModalStats();
+      if (scriptEditor) {
+        scriptEditor.syncFromSource();
       }
       saveTranscriptIfEnabled();
       parseAndRenderTranscript();
@@ -1250,190 +1023,52 @@
   });
 
   transcriptInput.addEventListener('input', () => {
-    if (modalTranscriptInput && modalScriptEditor && !modalScriptEditor.classList.contains('hidden')) {
-      modalTranscriptInput.value = transcriptInput.value;
-      if (typeof updateModalStats === 'function') updateModalStats();
+    if (scriptEditor) {
+      scriptEditor.syncFromSource();
     }
     saveTranscriptIfEnabled();
     parseAndRenderTranscript();
     updateStartButton();
   });
 
-  // ---- Script Editor Modal Controller ----------------------------------------
-  function updateModalStats() {
-    if (!modalTranscriptInput) return;
-    const text = modalTranscriptInput.value || '';
-    const words = text.trim() ? text.trim().split(/\s+/).filter(w => !w.startsWith('#')).length : 0;
-    const sections = (text.match(/^#[^\n]+/gm) || []).length;
-    const totalSecs = Math.round((words / 135) * 60);
-    const mins = Math.floor(totalSecs / 60);
-    const secs = totalSecs % 60;
-    const durationStr = mins > 0 ? `~${mins}m ${secs}s` : `~${secs}s`;
-
-    if (modalStatWords) modalStatWords.textContent = `${words} ${words === 1 ? 'word' : 'words'}`;
-    if (modalStatDuration) modalStatDuration.textContent = durationStr;
-    if (modalStatSections) modalStatSections.textContent = `${sections} ${sections === 1 ? 'section' : 'sections'}`;
+  // ---- Script Editor Subsystem ----------------------------------------------
+  try {
+    const ScriptEditorClass = (typeof TeleprompterScriptEditor !== 'undefined')
+      ? (TeleprompterScriptEditor.TeleprompterScriptEditor || TeleprompterScriptEditor)
+      : null;
+    scriptEditor = (ScriptEditorClass && transcriptInput)
+      ? new ScriptEditorClass({
+          sourceInput: transcriptInput,
+          fileInput: fileInput,
+          formatFn: (text) => (typeof formatScriptForPrompter === 'function' ? formatScriptForPrompter(text) : text),
+          getAutoFormatEnabled: () => autoFormatOnPaste,
+          onSync: () => {
+            saveTranscriptIfEnabled();
+            updateClearButtonVisibility();
+            parseAndRenderTranscript();
+            updateStartButton();
+          },
+          onClear: () => {
+            if (persistTranscript) {
+              if (configStore) configStore.set('script.saved_transcript', '');
+              localStorage.removeItem('teleprompter_saved_transcript');
+            }
+            updateClearButtonVisibility();
+            parseAndRenderTranscript();
+            updateStartButton();
+          }
+        })
+      : null;
+  } catch (err) {
+    console.error('[Teleprompter] Failed to initialize ScriptEditor modal:', err);
+    scriptEditor = null;
   }
 
-  function showModalScriptToast(msg = 'Saved & Applied ✓') {
-    if (!modalScriptToast) return;
-    modalScriptToast.textContent = msg;
-    modalScriptToast.classList.remove('opacity-0');
-    modalScriptToast.classList.add('opacity-100');
-    setTimeout(() => {
-      modalScriptToast.classList.remove('opacity-100');
-      modalScriptToast.classList.add('opacity-0');
-    }, 1800);
-  }
-
-  function openScriptModal() {
-    if (!modalScriptEditor || !modalTranscriptInput) return;
-    modalTranscriptInput.value = transcriptInput ? transcriptInput.value : '';
-    updateModalStats();
-    modalScriptEditor.classList.remove('hidden');
-    setTimeout(() => {
-      modalTranscriptInput.focus();
-    }, 50);
-  }
-
-  function closeScriptModal() {
-    if (!modalScriptEditor) return;
-    modalScriptEditor.classList.add('hidden');
-  }
-
-  function applyModalScript() {
-    if (modalTranscriptInput && transcriptInput) {
-      transcriptInput.value = modalTranscriptInput.value;
-      saveTranscriptIfEnabled();
-      updateClearButtonVisibility();
-      parseAndRenderTranscript();
-      updateStartButton();
-      showModalScriptToast('Saved & Applied ✓');
-    }
-  }
-
-  if (btnExpandTranscript) {
-    btnExpandTranscript.addEventListener('click', openScriptModal);
-  }
-  if (btnCloseScriptModal) {
-    btnCloseScriptModal.addEventListener('click', closeScriptModal);
-  }
-  if (btnModalCancel) {
-    btnModalCancel.addEventListener('click', closeScriptModal);
-  }
-  if (btnModalApply) {
-    btnModalApply.addEventListener('click', () => {
-      applyModalScript();
-      closeScriptModal();
-    });
-  }
-
-  if (modalTranscriptInput) {
-    modalTranscriptInput.addEventListener('input', () => {
-      if (transcriptInput) {
-        transcriptInput.value = modalTranscriptInput.value;
-        saveTranscriptIfEnabled();
-        updateClearButtonVisibility();
-        parseAndRenderTranscript();
-        updateStartButton();
-      }
-      updateModalStats();
-    });
-  }
-
-  if (btnModalAutoFormat && modalTranscriptInput) {
-    btnModalAutoFormat.addEventListener('click', () => {
-      if (!modalTranscriptInput.value || !modalTranscriptInput.value.trim()) return;
-      const formatted = formatScriptForPrompter(modalTranscriptInput.value);
-      modalTranscriptInput.value = formatted;
-      if (transcriptInput) transcriptInput.value = formatted;
-      saveTranscriptIfEnabled();
-      updateClearButtonVisibility();
-      parseAndRenderTranscript();
-      updateStartButton();
-      updateModalStats();
-      showModalScriptToast('Auto-formatted ✓');
-    });
-  }
-
-  if (btnModalImportFile && fileInput) {
-    btnModalImportFile.addEventListener('click', () => {
-      fileInput.click();
-    });
-  }
-
-  if (btnModalClear && modalTranscriptInput) {
-    btnModalClear.addEventListener('click', () => {
-      if (!modalTranscriptInput.value.trim()) return;
-      if (modalTranscriptInput.value.trim().length > 30) {
-        if (!confirm('Are you sure you want to clear the transcript?')) return;
-      }
-      modalTranscriptInput.value = '';
-      if (transcriptInput) {
-        transcriptInput.value = '';
-        if (persistTranscript) {
-          if (configStore) configStore.set('script.saved_transcript', '');
-          localStorage.removeItem('teleprompter_saved_transcript');
-        }
-        updateClearButtonVisibility();
-        parseAndRenderTranscript();
-        updateStartButton();
-      }
-      updateModalStats();
-      showModalScriptToast('Cleared');
-    });
-  }
-
-  function setModalFontSize(size) {
-    if (!modalTranscriptInput) return;
-    modalTranscriptInput.classList.remove('text-xs', 'text-sm', 'text-base', 'text-lg');
-    if (size === 'sm') modalTranscriptInput.classList.add('text-xs');
-    else if (size === 'lg') modalTranscriptInput.classList.add('text-base');
-    else modalTranscriptInput.classList.add('text-sm');
-
-    [btnModalFontSm, btnModalFontMd, btnModalFontLg].forEach((btn) => {
-      if (btn) {
-        btn.classList.remove('bg-gray-800', 'text-indigo-300', 'font-semibold');
-        btn.classList.add('text-gray-400');
-      }
-    });
-    const activeBtn = size === 'sm' ? btnModalFontSm : size === 'lg' ? btnModalFontLg : btnModalFontMd;
-    if (activeBtn) {
-      activeBtn.classList.remove('text-gray-400');
-      activeBtn.classList.add('bg-gray-800', 'text-indigo-300', 'font-semibold');
-    }
-  }
-
-  if (btnModalFontSm) btnModalFontSm.addEventListener('click', () => setModalFontSize('sm'));
-  if (btnModalFontMd) btnModalFontMd.addEventListener('click', () => setModalFontSize('md'));
-  if (btnModalFontLg) btnModalFontLg.addEventListener('click', () => setModalFontSize('lg'));
-
-  if (transcriptInput) {
-    transcriptInput.addEventListener('dblclick', openScriptModal);
-  }
-
-  if (modalScriptEditor) {
-    modalScriptEditor.addEventListener('click', (e) => {
-      if (e.target === modalScriptEditor) closeScriptModal();
-    });
-  }
-
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && modalScriptEditor && !modalScriptEditor.classList.contains('hidden')) {
-      closeScriptModal();
-      return;
-    }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'e') {
-      const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
-      if (modalScriptEditor && !modalScriptEditor.classList.contains('hidden')) {
-        e.preventDefault();
-        closeScriptModal();
-      } else if (activeTag !== 'input' || document.activeElement === transcriptInput) {
-        e.preventDefault();
-        openScriptModal();
-      }
-    }
-  });
+  // External / legacy compatibility helpers
+  function openScriptModal() { if (scriptEditor) scriptEditor.open(); }
+  function closeScriptModal() { if (scriptEditor) scriptEditor.close(); }
+  function updateModalStats() { if (scriptEditor) scriptEditor.updateStats(); }
+  function showModalScriptToast(msg = 'Saved & Applied ✓') { if (scriptEditor) scriptEditor.showToast(msg); }
 
   // ---- Transcript parsing ----------------------------------------------------
   function parseAndRenderTranscript() {
@@ -1537,62 +1172,7 @@
   }
 
   // ---- Start / Rehearse / Stop -----------------------------------------------
-  if (btnRehearse) {
-    btnRehearse.addEventListener('click', async () => {
-      if (isPrompting) return;
-      if (!transcriptInput.value.trim()) return;
-
-      try {
-        parseAndRenderTranscript();
-        currentWordIndex = 0;
-        isPrompting = true;
-        isRehearsal = true;
-
-        if (optRecordMode) optRecordMode.disabled = true;
-        if (optRecordFormat) optRecordFormat.disabled = true;
-
-        if (!mediaSession.audioStream || !mediaSession.audioStream.active || !mediaSession.audioStream.getAudioTracks().some((t) => t.readyState === 'live')) {
-          await initAudio();
-        }
-        await mediaSession.ensureAudioContext();
-
-        if (activeAudioSource === 'browser') {
-          startBrowserAudioStream();
-        }
-
-        recIndicator.classList.add('hidden');
-
-        const sectionBoundaries = parsedSections.map((s) => s.startIndex).filter((n) => n !== null && n !== undefined);
-        send({
-          type: 'start',
-          words: allWords.map((w) => w.original),
-          section_boundaries: sectionBoundaries,
-          rehearsal: true,
-          wpm: 140,
-          audio_device: activeAudioSource
-        });
-
-        updateStopButtonText();
-        btnStart.classList.add('hidden');
-        btnRehearse.classList.add('hidden');
-        btnStop.classList.remove('hidden');
-        updateHighlighting(0);
-        updateStartButton();
-        setBadge(vadStatus, 'REHEARSAL (CATCHING FUMBLES)', 'bg-emerald-950 text-emerald-400 border-emerald-500/30');
-        speechHud.textContent = 'Trial read-through: read naturally. Skipped, stumbled, or repeated words will be caught!';
-      } catch (err) {
-        isPrompting = false;
-        isRehearsal = false;
-        if (optRecordMode) optRecordMode.disabled = false;
-        if (optRecordFormat) optRecordFormat.disabled = false;
-        updateStartButton();
-        speechHud.textContent = '⚠ Error starting rehearsal: ' + (err && err.message ? err.message : String(err));
-        setBadge(vadStatus, 'ERROR', 'bg-red-950 text-red-400 border-red-500/30');
-      }
-    });
-  }
-
-  btnStart.addEventListener('click', async () => {
+  async function startSession(rehearsal = false) {
     if (isPrompting) return;
     if (!transcriptInput.value.trim()) return;
 
@@ -1600,29 +1180,26 @@
       parseAndRenderTranscript();
       currentWordIndex = 0;
       isPrompting = true;
-      isRehearsal = false;
+      isRehearsal = rehearsal;
 
-      activeRecordMode = optRecordMode ? optRecordMode.value : 'video';
-      if (optRecordMode) optRecordMode.disabled = true;
-      if (optRecordFormat) optRecordFormat.disabled = true;
+      if (!rehearsal) {
+        mediaSession.activeRecordMode = optRecordMode ? optRecordMode.value : 'video';
+      }
+      mediaSession.setControlsDisabled(true);
 
       if (!mediaSession.audioStream || !mediaSession.audioStream.active || !mediaSession.audioStream.getAudioTracks().some((t) => t.readyState === 'live')) {
         await initAudio();
       }
       await mediaSession.ensureAudioContext();
 
-      if (activeAudioSource === 'browser') {
+      if (mediaSession.activeAudioSource === 'browser') {
         startBrowserAudioStream();
       }
 
-      if (activeRecordMode !== 'off') {
+      if (!rehearsal && mediaSession.activeRecordMode !== 'off') {
         try {
-          console.log('[DEBUG START] Starting recording. mode:', activeRecordMode, 'audioFormat:', activeAudioFormat, 'videoFormat:', activeVideoFormat);
-          await mediaSession.startRecording({
-            mode: activeRecordMode,
-            audioFormat: activeAudioFormat,
-            videoFormat: activeVideoFormat
-          });
+          console.log('[DEBUG START] Starting recording. mode:', mediaSession.activeRecordMode, 'audioFormat:', mediaSession.activeAudioFormat, 'videoFormat:', mediaSession.activeVideoFormat);
+          await mediaSession.startRecording();
           console.log('[DEBUG START] Recording started successfully. mediaRecorder state:', mediaSession.mediaRecorder ? mediaSession.mediaRecorder.state : 'null');
           recIndicator.classList.remove('hidden');
         } catch (recErr) {
@@ -1636,53 +1213,81 @@
       }
 
       const sectionBoundaries = parsedSections.map((s) => s.startIndex).filter((n) => n !== null && n !== undefined);
-      send({
+      const startPayload = {
         type: 'start',
         words: allWords.map((w) => w.original),
         section_boundaries: sectionBoundaries,
         wpm: 140,
-        audio_device: activeAudioSource
-      });
+        audio_device: mediaSession.activeAudioSource
+      };
+      if (rehearsal) {
+        startPayload.rehearsal = true;
+      }
+      send(startPayload);
 
-      sessionStartTime = Date.now();
-      currentActiveSectionId = null;
-      sectionTimeline.reset(parsedSections[0] ? parsedSections[0].id : null);
-      if (parsedSections.length > 0) {
-        if (btnRetake) {
-          btnRetake.classList.remove('hidden');
-          btnRetake.classList.add('flex');
-          if (btnRetakeText) {
-            btnRetakeText.textContent = `Re-take [${parsedSections[0].title}]`;
+      if (!rehearsal) {
+        sessionStartTime = Date.now();
+        currentActiveSectionId = null;
+        sectionTimeline.reset(parsedSections[0] ? parsedSections[0].id : null);
+        if (parsedSections.length > 0) {
+          if (btnRetake) {
+            btnRetake.classList.remove('hidden');
+            btnRetake.classList.add('flex');
+            if (btnRetakeText) {
+              btnRetakeText.textContent = `Re-take [${parsedSections[0].title}]`;
+            }
           }
-        }
-      } else {
-        if (btnRetake) {
-          btnRetake.classList.add('hidden');
-          btnRetake.classList.remove('flex');
+        } else {
+          if (btnRetake) {
+            btnRetake.classList.add('hidden');
+            btnRetake.classList.remove('flex');
+          }
         }
       }
 
+      // Hide the re-open button while a new session is active
+      if (btnReopenExport) {
+        btnReopenExport.classList.add('hidden');
+        btnReopenExport.classList.remove('flex');
+      }
       updateStopButtonText();
       btnStart.classList.add('hidden');
       if (btnRehearse) btnRehearse.classList.add('hidden');
       btnStop.classList.remove('hidden');
+      // Positional-only scroll-to-word-0 at session start.
+      // Must NOT stamp sectionTimeline timestamps — the speaker hasn't uttered a word yet.
+      // Temporarily gate isPrompting so wordSeen() skips all timestamp mutations.
+      const _wasPrompting = isPrompting;
+      isPrompting = false;
       updateHighlighting(0);
+      isPrompting = _wasPrompting;
       updateStartButton();
-      setBadge(vadStatus, 'LISTENING (LOCAL WHISPER)', 'bg-indigo-950 text-indigo-400 border-indigo-500/30');
-      if (recIndicator.classList.contains('hidden') && activeRecordMode !== 'off') {
-        speechHud.textContent = 'Speech sync listening, but recording is inactive (check camera/mic permissions).';
+
+      if (rehearsal) {
+        setBadge(vadStatus, 'REHEARSAL (CATCHING FUMBLES)', 'bg-emerald-950 text-emerald-400 border-emerald-500/30');
+        speechHud.textContent = 'Trial read-through: read naturally. Skipped, stumbled, or repeated words will be caught!';
       } else {
-        speechHud.textContent = 'Speak into the mic to scroll in sync…';
+        setBadge(vadStatus, 'LISTENING (LOCAL WHISPER)', 'bg-indigo-950 text-indigo-400 border-indigo-500/30');
+        if (recIndicator.classList.contains('hidden') && mediaSession.activeRecordMode !== 'off') {
+          speechHud.textContent = 'Speech sync listening, but recording is inactive (check camera/mic permissions).';
+        } else {
+          speechHud.textContent = 'Speak into the mic to scroll in sync…';
+        }
       }
     } catch (err) {
       isPrompting = false;
-      if (optRecordMode) optRecordMode.disabled = false;
-      if (optRecordFormat) optRecordFormat.disabled = false;
+      isRehearsal = false;
+      mediaSession.setControlsDisabled(false);
       updateStartButton();
-      speechHud.textContent = '⚠ Error starting session: ' + (err && err.message ? err.message : String(err));
+      speechHud.textContent = `⚠ Error starting ${rehearsal ? 'rehearsal' : 'session'}: ` + (err && err.message ? err.message : String(err));
       setBadge(vadStatus, 'ERROR', 'bg-red-950 text-red-400 border-red-500/30');
     }
-  });
+  }
+
+  if (btnRehearse) {
+    btnRehearse.addEventListener('click', () => startSession(true));
+  }
+  btnStart.addEventListener('click', () => startSession(false));
 
   let isStopping = false;
 
@@ -1691,7 +1296,7 @@
       return;
     }
     isStopping = true;
-    console.log('[DEBUG STOP] clicked. activeRecordMode:', activeRecordMode, 'mediaRecorder:', mediaSession.mediaRecorder ? mediaSession.mediaRecorder.state : 'null');
+    console.log('[DEBUG STOP] clicked. activeRecordMode:', mediaSession.activeRecordMode, 'mediaRecorder:', mediaSession.mediaRecorder ? mediaSession.mediaRecorder.state : 'null');
 
     // Immediate visual feedback so the user knows Stop has registered
     btnStop.disabled = true;
@@ -1714,29 +1319,97 @@
       isStopping = false;
       btnStop.disabled = false;
 
-      if (optRecordMode) optRecordMode.disabled = false;
-      if (optRecordFormat) optRecordFormat.disabled = false;
+      mediaSession.setControlsDisabled(false);
 
       const sessionEndTime = Date.now();
       const totalSessionSec = (sessionEndTime - sessionStartTime) / 1000;
       // Close the active section via SectionTimeline (C1) and resolve fallback boundaries (Step 2)
       sectionTimeline.close(totalSessionSec);
       sectionTimeline.resolveBoundaries(totalSessionSec);
+
+      // ── [DIAG] Section Boundary Dump ────────────────────────────────────────
+      // Paste the console output from here into chat to diagnose boundary issues.
+      // Remove this block once the take slicing is confirmed correct.
+      try {
+        const markers = sectionTimeline.getSectionMarkers();
+        console.group('[DIAG] Section boundaries at Stop (totalSessionSec=' + totalSessionSec.toFixed(3) + 's)');
+        markers.forEach((s, i) => {
+          const dur = (s.startSec !== null && s.endSec !== null)
+            ? (s.endSec - s.startSec).toFixed(3) + 's'
+            : 'N/A';
+          console.log(
+            `  [${i + 1}] id=${s.id}  title="${s.title}"` +
+            `  startSec=${s.startSec !== null ? s.startSec.toFixed(3) : 'null'}` +
+            `  endSec=${s.endSec !== null ? s.endSec.toFixed(3) : 'null'}` +
+            `  _lastSeenSec=${s._lastSeenSec !== null ? Number(s._lastSeenSec).toFixed(3) : 'null'}` +
+            `  duration=${dur}`
+          );
+        });
+        console.groupEnd();
+      } catch (_diagErr) { /* never block the stop flow */ }
+      // ── end [DIAG] ──────────────────────────────────────────────────────────
       currentActiveSectionId = null;
 
       send({ type: 'stop' });
 
-      if (activeRecordMode !== 'off' && mediaSession.mediaRecorder && mediaSession.mediaRecorder.state !== 'inactive') {
+      if (mediaSession.activeRecordMode !== 'off' && mediaSession.mediaRecorder && mediaSession.mediaRecorder.state !== 'inactive') {
+        const willProcessTakes = (mediaSession.activeRecordMode === 'audio' || !mediaSession.hasRecordedVideoTrack)
+          && (mediaSession.activeAudioFormat === 'wav' || mediaSession.activeAudioFormat === 'mp3')
+          && sectionTimeline.getSectionMarkers().length > 0;
+
+        if (willProcessTakes) {
+          showProcessingModal();
+        }
+
+        const handleRefineProgress = (msg) => {
+          if (!msg || !msg.total) return;
+          const currentSec = Math.min(msg.total, Math.max(0, Number(msg.current) || 0));
+          const totalSec = Number(msg.total) || 1;
+          const progressFrac = currentSec / totalSec;
+          // Scale Whisper transcription progress to 15% - 80% of overall bar
+          const pct = Math.round(15 + progressFrac * 65);
+          const elapsedSec = (Date.now() - processingStartTime) / 1000;
+          let timeEst = 'Estimating…';
+          if (progressFrac > 0.05 && elapsedSec > 0.3) {
+            const totalEstimatedTime = elapsedSec / progressFrac;
+            const remainingSec = Math.max(0, totalEstimatedTime - elapsedSec);
+            // Add ~1.5s for slicing and encoding
+            const totalRemaining = Math.ceil(remainingSec + 1.5);
+            timeEst = totalRemaining > 1 ? `~${totalRemaining}s remaining` : 'Almost done…';
+          }
+          updateProcessingModal({
+            percent: pct,
+            phase: `Transcribing audio (${Math.round(currentSec)}s / ${Math.round(totalSec)}s)…`,
+            timeRemaining: timeEst
+          });
+        };
+
         console.log('[DEBUG STOP] Calling mediaSession.stopRecording...');
         mediaSession.stopRecording({
           sections: sectionTimeline.getSectionMarkers(),
           sessionDurationSec: totalSessionSec,
-          onProgress: (msg) => {
-            console.log('[DEBUG STOP] Progress:', msg);
-            setBadge(vadStatus, 'ENCODING…', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
-            speechHud.textContent = msg;
+          refineBoundaries: (buf, secs, progCb) => requestRefinedBoundaries(buf, secs, (msg) => {
+            handleRefineProgress(msg);
+            if (typeof progCb === 'function') progCb(msg);
+          }),
+          onProgress: (prog) => {
+            console.log('[DEBUG STOP] Progress:', prog);
+            if (typeof prog === 'string') {
+              updateProcessingModal({ phase: prog });
+              setBadge(vadStatus, 'ENCODING…', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
+              speechHud.textContent = prog;
+            } else if (prog && typeof prog === 'object') {
+              updateProcessingModal({
+                percent: prog.percent,
+                phase: prog.text || prog.phase,
+                timeRemaining: prog.timeRemaining
+              });
+              setBadge(vadStatus, 'ENCODING…', 'bg-yellow-950 text-yellow-400 border-yellow-500/30');
+              if (prog.text) speechHud.textContent = prog.text;
+            }
           }
         }).then(async (result) => {
+          hideProcessingModal();
           console.log('[DEBUG STOP] stopRecording resolved with:', result);
           if (!result) return;
           const { blob, extension, filename, takes } = result;
@@ -1747,7 +1420,7 @@
             return;
           }
 
-          const effectiveMode = (activeRecordMode === 'audio' || !mediaSession.hasRecordedVideoTrack) ? 'audio' : 'video';
+          const effectiveMode = (mediaSession.activeRecordMode === 'audio' || !mediaSession.hasRecordedVideoTrack) ? 'audio' : 'video';
           const exportTakes = (takes && takes.length > 0) ? takes : [
             {
               filename: filename,
@@ -1764,6 +1437,7 @@
           // Present export modal with all takes and master file
           openExportModal(exportTakes, effectiveMode, extension);
         }).catch((err) => {
+          hideProcessingModal();
           console.error('Error saving recording:', err);
           setBadge(vadStatus, 'ERROR', 'bg-red-950 text-red-400 border-red-500/30');
           speechHud.textContent = '⚠ Error saving recording: ' + (err && err.message ? err.message : String(err));
@@ -1775,7 +1449,7 @@
           speechHud.textContent = `Trial complete! ${count} fumbled ${count === 1 ? 'word' : 'words'} highlighted for your live take.`;
         } else {
           setBadge(vadStatus, 'STOPPED', 'bg-gray-800 text-gray-400 border-gray-700');
-          speechHud.textContent = activeRecordMode === 'off'
+          speechHud.textContent = mediaSession.activeRecordMode === 'off'
             ? 'Session ended (sync-only).'
             : 'Session ended (no recording was active).';
         }
@@ -1793,6 +1467,37 @@
 
   // ---- Keyboard manual stepping & Hotkeys ---------------------------------
   window.addEventListener('keydown', (e) => {
+    // 1. Modal dismissals (Escape key)
+    if (e.key === 'Escape') {
+      if (scriptEditor && scriptEditor.isOpen()) {
+        scriptEditor.close();
+        return;
+      }
+      if (cues && cues.isOpen()) {
+        cues.closeModal();
+        return;
+      }
+      if (serverControl && serverControl.isOpen() && serverControl.canDismiss()) {
+        serverControl.close();
+        return;
+      }
+      return;
+    }
+
+    // 2. Script Editor shortcut (Cmd/Ctrl + E)
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'e') {
+      const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+      if (scriptEditor && scriptEditor.isOpen()) {
+        e.preventDefault();
+        scriptEditor.close();
+      } else if (activeTag !== 'input' || document.activeElement === transcriptInput) {
+        e.preventDefault();
+        if (scriptEditor) scriptEditor.open();
+      }
+      return;
+    }
+
+    // 3. Navigation & Hotkeys (ignore when typing in inputs/textareas)
     const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
     if (activeTag === 'textarea' || activeTag === 'input') return;
 
@@ -1846,109 +1551,80 @@
     });
   }
 
-  // ---- Export Modal & Delivery Subsystem ------------------------------------
-  const exportSession = (typeof TeleprompterExport !== 'undefined')
-    ? TeleprompterExport.init({
-        modalEl: document.getElementById('modal-export'),
-        takesList: document.getElementById('export-takes-list'),
-        summaryEl: document.getElementById('export-summary-text'),
-        badgeEl: document.getElementById('export-mode-badge'),
-        speechHudEl: speechHud,
-        createZipFn: (files) => (typeof TeleprompterMedia !== 'undefined' && TeleprompterMedia.createZipBlob ? TeleprompterMedia.createZipBlob(files) : Promise.reject(new Error('Zip unavailable'))),
-      })
-    : null;
-
-  // Preserve external call sites unchanged.
-  function openExportModal(takes, mode, format) { if (exportSession) exportSession.open(takes, mode, format); }
-  function closeExportModal() { if (exportSession) exportSession.close(); }
-
-  // ---- Server Control Subsystem ---------------------------------------------
-  function closeServerActionModal() {
-    if (modalServerAction) {
-      modalServerAction.classList.add('hidden');
-    }
-  }
-
-  function showServerRestartConfirm() {
-    if (!modalServerAction) return;
-    serverActionIcon.className = 'w-12 h-12 mx-auto rounded-full bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-400';
-    serverActionIcon.innerHTML = `<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>`;
-    serverActionTitle.textContent = 'Restart Teleprompter Server?';
-    serverActionDesc.innerHTML = 'The Python server will release audio devices, reload speech models, and restart in place. The browser will reconnect automatically.';
-    serverActionFooter.innerHTML = `
-      <button id="btn-modal-cancel" type="button" class="px-3.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white font-medium rounded-lg text-xs transition cursor-pointer">Cancel</button>
-      <button id="btn-modal-confirm-restart" type="button" class="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-semibold rounded-lg text-xs transition shadow cursor-pointer">Restart Server</button>
-    `;
-    modalServerAction.classList.remove('hidden');
-
-    const btnCancel = document.getElementById('btn-modal-cancel');
-    const btnConfirm = document.getElementById('btn-modal-confirm-restart');
-    if (btnCancel) btnCancel.addEventListener('click', closeServerActionModal);
-    if (btnConfirm) btnConfirm.addEventListener('click', executeServerRestart);
-  }
-
-  function showServerShutdownConfirm() {
-    if (!modalServerAction) return;
-    serverActionIcon.className = 'w-12 h-12 mx-auto rounded-full bg-red-500/20 border border-red-400/40 flex items-center justify-center text-red-400';
-    serverActionIcon.innerHTML = `<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 4.243a9 9 0 01-6.364-2.636 9 9 0 010-12.728m0 0l2.829 2.829M12 3v9"/></svg>`;
-    serverActionTitle.textContent = 'Shut Down Teleprompter Server?';
-    serverActionDesc.innerHTML = 'The server process will terminate completely. To use the teleprompter again later, you will need to restart it from your terminal using <code class="text-indigo-300 font-mono text-xs bg-gray-950 px-1.5 py-0.5 rounded border border-gray-800">./run.sh</code>.';
-    serverActionFooter.innerHTML = `
-      <button id="btn-modal-cancel" type="button" class="px-3.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white font-medium rounded-lg text-xs transition cursor-pointer">Cancel</button>
-      <button id="btn-modal-confirm-shutdown" type="button" class="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg text-xs transition shadow cursor-pointer">Shut Down Server</button>
-    `;
-    modalServerAction.classList.remove('hidden');
-
-    const btnCancel = document.getElementById('btn-modal-cancel');
-    const btnConfirm = document.getElementById('btn-modal-confirm-shutdown');
-    if (btnCancel) btnCancel.addEventListener('click', closeServerActionModal);
-    if (btnConfirm) btnConfirm.addEventListener('click', executeServerShutdown);
-  }
-
-  function showServerRestartingState() {
-    if (!modalServerAction) return;
-    serverActionIcon.className = 'w-12 h-12 mx-auto rounded-full bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-400';
-    serverActionIcon.innerHTML = `<svg class="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`;
-    serverActionTitle.textContent = 'Restarting Server…';
-    serverActionDesc.innerHTML = 'The server is reloading. Reconnecting automatically…';
-    serverActionFooter.innerHTML = `<span class="text-[11px] text-gray-400 font-mono animate-pulse">Waiting for backend…</span>`;
-    modalServerAction.classList.remove('hidden');
-  }
-
-  function showServerShutdownState() {
-    if (!modalServerAction) return;
-    serverActionIcon.className = 'w-12 h-12 mx-auto rounded-full bg-red-500/20 border border-red-400/40 flex items-center justify-center text-red-400';
-    serverActionIcon.innerHTML = `<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>`;
-    serverActionTitle.textContent = 'Server Shut Down';
-    serverActionDesc.innerHTML = 'The local Python server has stopped. You can safely close this browser tab.<br><br>To restart later, run in your terminal:<br><code class="inline-block mt-1 text-indigo-300 font-mono text-xs bg-gray-950 px-2.5 py-1 rounded border border-gray-800">./run.sh</code>';
-    serverActionFooter.innerHTML = `<span class="text-[11px] text-red-400 font-mono">Process terminated</span>`;
-    modalServerAction.classList.remove('hidden');
-  }
-
-  function executeServerRestart() {
-    isRestartingServer = true;
-    showServerRestartingState();
-    send({ type: 'restart_server' });
-  }
-
-  function executeServerShutdown() {
-    serverShutDown = true;
-    showServerShutdownState();
-    send({ type: 'shutdown_server' });
-  }
-
-  if (btnRestartServer) {
-    btnRestartServer.addEventListener('click', showServerRestartConfirm);
-  }
-  if (btnShutdownServer) {
-    btnShutdownServer.addEventListener('click', showServerShutdownConfirm);
-  }
-  if (modalServerAction) {
-    modalServerAction.addEventListener('click', (e) => {
-      if (e.target === modalServerAction && !isRestartingServer && !serverShutDown) {
-        closeServerActionModal();
+  if (btnClearHighlights) {
+    btnClearHighlights.addEventListener('click', () => {
+      if (speechHud && !isPrompting) {
+        speechHud.textContent = 'Rehearsal fumble highlights cleared.';
       }
     });
+  }
+
+  // ---- Export Modal & Delivery Subsystem ------------------------------------
+  let exportSession = null;
+  try {
+    exportSession = (typeof TeleprompterExport !== 'undefined')
+      ? TeleprompterExport.init({
+          modalEl: document.getElementById('modal-export'),
+          takesList: document.getElementById('export-takes-list'),
+          summaryEl: document.getElementById('export-summary-text'),
+          badgeEl: document.getElementById('export-mode-badge'),
+          speechHudEl: speechHud,
+          createZipFn: (files) => (typeof TeleprompterMedia !== 'undefined' && TeleprompterMedia.createZipBlob ? TeleprompterMedia.createZipBlob(files) : Promise.reject(new Error('Zip unavailable'))),
+        })
+      : null;
+  } catch (err) {
+    console.error('[Teleprompter] Failed to initialize Export modal:', err);
+    exportSession = null;
+  }
+
+  // Last export result — persisted so the user can re-open the modal after closing it.
+  let _lastExportResult = null;
+  const btnReopenExport = document.getElementById('btn-reopen-export');
+
+  function openExportModal(takes, mode, format) {
+    if (!exportSession) return;
+    // Cache for re-open button
+    _lastExportResult = { takes, mode, format };
+    if (btnReopenExport) {
+      btnReopenExport.classList.remove('hidden');
+      btnReopenExport.classList.add('flex');
+    }
+    exportSession.open(takes, mode, format);
+  }
+  function closeExportModal() { if (exportSession) exportSession.close(); }
+
+  if (btnReopenExport) {
+    btnReopenExport.addEventListener('click', () => {
+      if (_lastExportResult && exportSession) {
+        const { takes, mode, format } = _lastExportResult;
+        exportSession.open(takes, mode, format);
+      }
+    });
+  }
+
+  // ---- Server Control Subsystem ---------------------------------------------
+  try {
+    const ServerControlClass = (typeof TeleprompterServerControl !== 'undefined')
+      ? (TeleprompterServerControl.TeleprompterServerControl || TeleprompterServerControl)
+      : null;
+    serverControl = (ServerControlClass && modalServerAction)
+      ? new ServerControlClass({
+          modalEl: modalServerAction,
+          iconEl: serverActionIcon,
+          titleEl: serverActionTitle,
+          descEl: serverActionDesc,
+          footerEl: serverActionFooter,
+          btnRestartTrigger: btnRestartServer,
+          btnShutdownTrigger: btnShutdownServer,
+          serverStatusPill,
+          onRestart: () => send({ type: 'restart_server' }),
+          onShutdown: () => send({ type: 'shutdown_server' }),
+          onToast: (msg) => showFormatToast(msg),
+        })
+      : null;
+  } catch (err) {
+    console.error('[Teleprompter] Failed to initialize ServerControl modal:', err);
+    serverControl = null;
   }
 
   document.getElementById('btn-toggle-panel').addEventListener('click', () => {
@@ -1956,32 +1632,36 @@
   });
 
   // ---- Boot ------------------------------------------------------------------
-  updateFormatUI();
-  updateAudioSourceUI(activeAudioSource);
-  applyDifficultColorStyles();
-  renderDifficultTags();
-  renderRehearsalTags();
-  if (optFontsize) {
-    const initialFontSize = parseInt(optFontsize.value, 10) || 25;
-    currentLineHeight = viewport.setFontSize(initialFontSize, parseInt(optLines.value, 10));
-  }
-  if (optBoxWidth) {
-    const savedBoxWidth = configStore ? configStore.get('ui.box_width_pct') : localStorage.getItem('teleprompter_box_width_pct');
-    const widthToApply = savedBoxWidth ? parseInt(savedBoxWidth, 10) : 68;
-    optBoxWidth.value = widthToApply;
-    prompterBox.style.width = `${widthToApply}%`;
-    prompterBox.style.maxWidth = `${widthToApply}%`;
-    if (valBoxWidth) valBoxWidth.textContent = `${widthToApply}%`;
-  }
-  if (persistTranscript) {
-    const savedTranscript = configStore ? configStore.get('script.saved_transcript') : localStorage.getItem('teleprompter_saved_transcript');
-    if (savedTranscript && (!transcriptInput.value || !transcriptInput.value.trim())) {
-      transcriptInput.value = savedTranscript;
+  try {
+    if (optFontsize) {
+      const initialFontSize = parseInt(optFontsize.value, 10) || 25;
+      currentLineHeight = viewport.setFontSize(initialFontSize, parseInt(optLines.value, 10));
     }
+    if (optBoxWidth) {
+      const savedBoxWidth = configStore ? configStore.get('ui.box_width_pct') : localStorage.getItem('teleprompter_box_width_pct');
+      const widthToApply = savedBoxWidth ? parseInt(savedBoxWidth, 10) : 68;
+      optBoxWidth.value = widthToApply;
+      prompterBox.style.width = `${widthToApply}%`;
+      prompterBox.style.maxWidth = `${widthToApply}%`;
+      if (valBoxWidth) valBoxWidth.textContent = `${widthToApply}%`;
+    }
+    if (persistTranscript) {
+      const savedTranscript = (configStore && configStore.get('script.saved_transcript'))
+        || (typeof localStorage !== 'undefined' ? localStorage.getItem('teleprompter_saved_transcript') : '')
+        || '';
+      if (savedTranscript && (!transcriptInput.value || !transcriptInput.value.trim())) {
+        transcriptInput.value = savedTranscript;
+      }
+      if (scriptEditor) {
+        scriptEditor.syncFromSource();
+      }
+    }
+    updateClearButtonVisibility();
+    parseAndRenderTranscript();
+    initCameraAndAudio();
+    updateViewportLines(parseInt(optLines.value, 10));
+    connect();
+  } catch (err) {
+    console.error('[Teleprompter] Error during boot sequence:', err);
   }
-  updateClearButtonVisibility();
-  parseAndRenderTranscript();
-  initCameraAndAudio();
-  updateViewportLines(parseInt(optLines.value, 10));
-  connect();
 })();

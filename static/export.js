@@ -243,6 +243,8 @@
       });
       this._takes = [];
       this._objectUrls = [];
+      this._currentAudio = null;
+      this._playingTakeIdx = null;
 
       this._wireStaticControls();
     }
@@ -256,12 +258,26 @@
     _wireStaticControls() {
       if (typeof document === 'undefined') return;
 
-      // Wire modal close buttons once
+      // Wire modal close handlers once (buttons, backdrop, and Escape key)
       const closeEls = [
         document.getElementById('btn-close-export-modal'),
         document.getElementById('btn-dismiss-export-modal'),
       ];
       closeEls.forEach((el) => el && el.addEventListener('click', () => this.close()));
+
+      if (this._modal && this._modal.addEventListener) {
+        this._modal.addEventListener('click', (e) => {
+          if (e.target === this._modal) this.close();
+        });
+      }
+
+      if (typeof document !== 'undefined' && document.addEventListener) {
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape' && this._modal && this._modal.classList && !this._modal.classList.contains('hidden')) {
+            this.close();
+          }
+        });
+      }
 
       // Wire Save All to Disk once
       const btnSaveAll = document.getElementById('btn-save-all-disk');
@@ -324,6 +340,13 @@
       // Event delegation on the takes list — one listener wired once for all per-take buttons
       if (this._list) {
         this._list.addEventListener('click', async (e) => {
+          const previewBtn = e.target.closest('.btn-preview-take');
+          if (previewBtn) {
+            const idx = parseInt(previewBtn.getAttribute('data-take-idx'), 10);
+            this.togglePreview(idx);
+            return;
+          }
+
           const saveDiskBtn = e.target.closest('.btn-save-disk');
           const saveAsBtn = e.target.closest('.btn-download-single');
           if (!saveDiskBtn && !saveAsBtn) return;
@@ -367,6 +390,98 @@
           btn.disabled = false;
         });
       }
+    }
+
+    togglePreview(idx) {
+      if (this._playingTakeIdx === idx) {
+        this.stopPlayback();
+        return;
+      }
+      this.playTake(idx);
+    }
+
+    stopPlayback() {
+      if (this._currentAudio) {
+        try {
+          this._currentAudio.pause();
+          this._currentAudio.currentTime = 0;
+        } catch (_) {}
+        this._currentAudio = null;
+      }
+      this._playingTakeIdx = null;
+      this._updatePreviewUI();
+    }
+
+    playTake(idx) {
+      this.stopPlayback();
+      const url = this._objectUrls[idx];
+      if (!url) return;
+
+      if (typeof Audio === 'undefined') {
+        this._playingTakeIdx = idx;
+        this._updatePreviewUI();
+        return;
+      }
+
+      try {
+        const audio = new Audio(url);
+        this._currentAudio = audio;
+        this._playingTakeIdx = idx;
+        this._updatePreviewUI();
+
+        audio.onended = () => {
+          if (this._currentAudio === audio) {
+            this.stopPlayback();
+          }
+        };
+
+        audio.onerror = (err) => {
+          console.warn('Audio preview playback error:', err);
+          if (this._currentAudio === audio) {
+            this.stopPlayback();
+          }
+        };
+
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((err) => {
+            console.warn('Audio preview playback failed:', err);
+            if (this._currentAudio === audio) {
+              this.stopPlayback();
+            }
+          });
+        }
+      } catch (err) {
+        console.warn('Audio initialization failed:', err);
+        this.stopPlayback();
+      }
+    }
+
+    _updatePreviewUI() {
+      if (!this._list || typeof this._list.querySelectorAll !== 'function') return;
+      const previewBtns = this._list.querySelectorAll('.btn-preview-take');
+      if (!previewBtns || !previewBtns.forEach) return;
+
+      previewBtns.forEach((btn) => {
+        const takeIdx = parseInt(btn.getAttribute('data-take-idx'), 10);
+        const isPlaying = (takeIdx === this._playingTakeIdx);
+
+        if (isPlaying) {
+          btn.className = 'btn-preview-take px-3 py-1.5 bg-amber-950/70 hover:bg-amber-900/90 text-amber-300 font-semibold text-xs rounded-lg border border-amber-600/60 ring-1 ring-amber-500/40 transition flex items-center gap-1.5 cursor-pointer shadow-sm';
+          btn.innerHTML = `
+            <svg class="w-3.5 h-3.5 text-amber-400 fill-current animate-pulse" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
+            <span>Stop</span>
+          `;
+          btn.setAttribute('title', 'Stop playback');
+        } else {
+          btn.className = 'btn-preview-take px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-xs font-medium rounded-lg border border-gray-700 transition flex items-center gap-1.5 cursor-pointer shadow-sm';
+          btn.innerHTML = `
+            <svg class="w-3.5 h-3.5 text-indigo-400 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            <span>Preview</span>
+          `;
+          btn.setAttribute('title', 'Preview audio take');
+        }
+      });
     }
 
     // Opens the modal and updates all internal state + DOM. Blob URLs created here.
@@ -426,17 +541,17 @@
               </div>
             </div>
             <div class="flex items-center gap-2 shrink-0">
-              <button data-take-idx="${idx}" class="btn-save-disk px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow transition flex items-center gap-1.5 cursor-pointer" title="Save ${take.filename} directly to project recordings/ folder on your Mac">
+              <button data-take-idx="${idx}" type="button" class="btn-preview-take px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-xs font-medium rounded-lg border border-gray-700 transition flex items-center gap-1.5 cursor-pointer shadow-sm" title="Preview audio take">
+                <svg class="w-3.5 h-3.5 text-indigo-400 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                <span>Preview</span>
+              </button>
+              <button data-take-idx="${idx}" type="button" class="btn-save-disk px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow transition flex items-center gap-1.5 cursor-pointer" title="Save ${take.filename} directly to project recordings/ folder on your Mac">
                 <svg class="w-3.5 h-3.5 text-indigo-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/></svg>
                 <span>Save to Disk</span>
               </button>
-              <a href="${objectUrl}" download="${take.filename}" class="btn-direct-download px-2.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-xs font-medium rounded-lg border border-gray-700 transition flex items-center gap-1 cursor-pointer" title="Direct browser download for ${take.filename}">
-                <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                <span>Direct</span>
+              <a href="${objectUrl}" download="${take.filename}" class="btn-direct-download p-2 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-gray-200 text-xs font-medium rounded-lg border border-gray-700 transition flex items-center justify-center cursor-pointer" title="Direct browser download for ${take.filename}">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
               </a>
-              <button data-take-idx="${idx}" class="btn-download-single px-2.5 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-gray-200 text-xs font-medium rounded-lg border border-gray-700 transition flex items-center gap-1 cursor-pointer" title="Save ${take.filename} with macOS folder picker">
-                <span>Save As…</span>
-              </button>
             </div>
           </div>
         `;
@@ -453,8 +568,9 @@
       this._modal.classList.remove('hidden');
     }
 
-    // Closes modal, revokes all blob URLs.
+    // Closes modal, stops preview playback, revokes all blob URLs.
     close() {
+      this.stopPlayback();
       if (this._modal) this._modal.classList.add('hidden');
       if (typeof URL !== 'undefined' && URL.revokeObjectURL) {
         this._objectUrls.forEach((url) => { try { URL.revokeObjectURL(url); } catch (_) {} });

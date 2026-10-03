@@ -90,6 +90,17 @@ describe('TeleprompterConfig - Legacy LocalStorage Migration', () => {
     const loaded = Config.migrateLegacyStorage(mockStorage);
     assert.equal(loaded.ui.box_width_pct, 72);
   });
+
+  test('migrates legacy teleprompter_saved_transcript when unified storage has empty saved_transcript', () => {
+    const existing = Config.getDefaultConfig();
+    const mockStorage = createMockStorage({
+      [Config.STORAGE_KEY]: JSON.stringify(existing),
+      teleprompter_saved_transcript: 'Fallback script from legacy key'
+    });
+
+    const loaded = Config.migrateLegacyStorage(mockStorage);
+    assert.equal(loaded.script.saved_transcript, 'Fallback script from legacy key');
+  });
 });
 
 describe('TeleprompterConfig - Store State, Patches, & Subscriptions', () => {
@@ -153,4 +164,68 @@ describe('TeleprompterConfig - Store State, Patches, & Subscriptions', () => {
     // UI defaults preserved
     assert.equal(store.get('ui.box_width_pct'), 68);
   });
+
+  test('does not clobber non-empty client script with empty server script', () => {
+    const store = Config.createConfigStore({ storage: createMockStorage() });
+    store.set('script.saved_transcript', 'Client drafting script');
+    assert.equal(store.get('script.saved_transcript'), 'Client drafting script');
+
+    store.reconcileServerConfig({
+      script: {
+        saved_transcript: '',
+        rehearsal_words: []
+      }
+    });
+
+    assert.equal(store.get('script.saved_transcript'), 'Client drafting script');
+  });
+
+  test('prioritizes active non-empty client script over stale server script', () => {
+    const store = Config.createConfigStore({ storage: createMockStorage() });
+    store.set('script.saved_transcript', 'Active client draft');
+
+    store.reconcileServerConfig({
+      script: {
+        saved_transcript: 'Stale server script from disk',
+        rehearsal_words: []
+      }
+    });
+
+    assert.equal(store.get('script.saved_transcript'), 'Active client draft');
+  });
+
+  test('adopts non-empty server script when client script is empty', () => {
+    const store = Config.createConfigStore({ storage: createMockStorage() });
+    assert.equal(store.get('script.saved_transcript'), '');
+
+    store.reconcileServerConfig({
+      script: {
+        saved_transcript: 'Persisted server script',
+        rehearsal_words: []
+      }
+    });
+    assert.equal(store.get('script.saved_transcript'), 'Persisted server script');
+  });
+
+  test('sanitizes rehearsal_words objects and filters out corrupted [object object] entries', () => {
+    const raw = {
+      script: {
+        rehearsal_words: [
+          { word: 'Synergy', clean: 'synergy', reason: 'stumbled' },
+          'Paradigm',
+          '[object Object]',
+          '[object object]',
+          { word: '[object Object]', clean: '[object object]', reason: 'skipped' },
+        ],
+        protected_terms: ['AGY', '[object Object]', 'WebAudio']
+      }
+    };
+    const sanitized = Config.validateAndSanitize(raw);
+    assert.deepEqual(sanitized.script.rehearsal_words, [
+      { word: 'Synergy', clean: 'synergy', reason: 'stumbled' },
+      'paradigm'
+    ]);
+    assert.deepEqual(sanitized.script.protected_terms, ['AGY', 'WebAudio']);
+  });
 });
+

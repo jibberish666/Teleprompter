@@ -179,7 +179,19 @@ def validate_and_sanitize(raw: Any) -> Dict[str, Any]:
             result["script"]["saved_transcript"] = st
         rw = scr.get("rehearsal_words")
         if isinstance(rw, list):
-            result["script"]["rehearsal_words"] = [str(w).strip().lower() for w in rw if str(w).strip()]
+            clean_rw = []
+            for w in rw:
+                if isinstance(w, dict):
+                    word = str(w.get("word") or w.get("clean") or "").strip()
+                    clean = str(w.get("clean") or word).strip().lower()
+                    reason = str(w.get("reason") or "stumbled").strip()
+                    if word and clean != "[object object]" and word.lower() != "[object object]":
+                        clean_rw.append({"word": word, "clean": clean, "reason": reason})
+                elif isinstance(w, str):
+                    s = w.strip()
+                    if s and s.lower() != "[object object]":
+                        clean_rw.append(s.lower())
+            result["script"]["rehearsal_words"] = clean_rw
 
     return result
 

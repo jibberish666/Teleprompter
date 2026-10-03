@@ -153,4 +153,72 @@ Second section speech never recognized by Whisper.`;
     assert.ok(takes.some((t) => t.filename === '2.mp3'));
     assert.ok(takes.some((t) => t.filename === 'everything.mp3'));
   });
+
+  test('startup isSessionActive=false guard prevents Section 1 boundary collapse when Whisper fires Section 2 early', () => {
+    // Reproduces the real-world bug:
+    // Without the fix, app.js calls updateHighlighting(0) with isPrompting=true at t≈0.001s,
+    // which stamps sec1.startSec=0 and _lastSeenSec≈0.001 before the speaker utters a word.
+    // When Section 2 is later recognized, the floor uses _lastSeenSec≈0.001 instead of the
+    // real last spoken word time, collapsing Section 1's audio take to near-zero.
+    // With the fix: isSessionActive=false for the startup call → no timestamps stamped.
+
+    const rawScript = `[1]\nHello world this is section one content here.\n[2]\nSection two begins here for the demo recording.`;
+    const { allWords, sections } = Formatter.parseTokens(rawScript);
+    assert.equal(sections.length, 2, 'Script must parse into exactly 2 sections');
+
+    let elapsedSec = 0;
+    const timeline = new Timeline.SectionTimeline(sections, () => elapsedSec);
+
+    // --- Simulate startup: reset + updateHighlighting(0) with isSessionActive=false guard ---
+    elapsedSec = 0.001;
+    timeline.reset(sections[0].id);
+    // The fix: startup call uses isSessionActive=false
+    timeline.wordSeen(allWords[0], false /* isSessionActive=false — startup positional-only call */);
+
+    assert.equal(sections[0].startSec, null,
+      'REGRESSION: startup positional call must NOT stamp startSec at t≈0');
+    assert.equal(sections[0]._lastSeenSec, null,
+      'REGRESSION: startup positional call must NOT stamp _lastSeenSec at t≈0');
+
+    // --- Speaker begins talking at t=2.0s ---
+    elapsedSec = 2.0;
+    timeline.wordSeen(allWords[0], true); // First real spoken word
+    assert.ok(sections[0].startSec !== null && sections[0].startSec >= 1.8,
+      `Section 1 startSec must be stamped from real first word (~1.9s), got: ${sections[0].startSec}`);
+
+    // Speaker progresses through Section 1
+    const sec2Start = sections[1].startIndex;
+    for (let i = 1; i < sec2Start; i++) {
+      elapsedSec = 2.0 + i * 0.4;
+      timeline.wordSeen(allWords[i], true);
+    }
+    const lastSec1WordTime = elapsedSec;
+
+    // --- Whisper returns first Section 2 token slightly into Sec 2 (one word skipped) ---
+    elapsedSec = lastSec1WordTime + 1.2;
+    const sec2Word = allWords[sec2Start + 1]; // second word of Section 2(1 boundary word missed)
+    assert.equal(sec2Word.sectionId, sections[1].id);
+    timeline.wordSeen(sec2Word, true);
+
+    assert.equal(timeline.activeId, sections[1].id, 'Must have transitioned to Section 2');
+    assert.ok(sections[0].endSec !== null, 'Section 1 must be closed');
+    assert.ok(sections[0].endSec >= lastSec1WordTime,
+      `Section 1 endSec (${sections[0].endSec}) must cover last spoken word at ${lastSec1WordTime}s`);
+    assert.ok(sections[0].endSec - sections[0].startSec >= 2.0,
+      `Section 1 audio take must span at least 2s of real speech, got: ${sections[0].endSec - sections[0].startSec}s`);
+
+    // Verify audio slicing produces a non-trivial take for Section 1
+    const sessionEndTime = elapsedSec + 5.0;
+    timeline.close(sessionEndTime);
+    timeline.resolveBoundaries(sessionEndTime);
+
+    const sessionBuffer = createMockBuffer(sessionEndTime, 1000);
+    const { takes } = Media.processAudioTakes(sessionBuffer, sections, 'mp3', 0.25);
+
+    const take1 = takes.find((t) => t.filename === '1.mp3');
+    assert.ok(take1, '1.mp3 take must exist');
+    assert.ok(take1.duration >= 2.0,
+      `1.mp3 duration must reflect full spoken Section 1 (≥2s), got: ${take1.duration}s`);
+  });
 });
+

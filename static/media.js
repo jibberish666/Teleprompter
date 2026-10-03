@@ -456,7 +456,7 @@
    * @param {number} [pad=0.25] - Silence padding in seconds around section bounds
    * @returns {{ takes: Array<{ filename: string, title: string, duration: number, blob: Blob|ArrayBuffer, isMaster: boolean }> }}
    */
-  function processAudioTakes(audioBuffer, sections = [], format = 'wav', pad = 0.25) {
+  function processAudioTakes(audioBuffer, sections = [], format = 'wav', pad = 0.25, onProgress = null) {
     if (!audioBuffer || !Array.isArray(sections) || sections.length === 0) {
       return { takes: [] };
     }
@@ -466,7 +466,8 @@
     const totalDuration = audioBuffer.duration || (audioBuffer.length / audioBuffer.sampleRate) || 0;
     const effectiveSections = reconcileSectionBoundaries(sections, totalDuration);
 
-    for (const sec of effectiveSections) {
+    for (let i = 0; i < effectiveSections.length; i++) {
+      const sec = effectiveSections[i];
       // Guard against unreached or unstarted sections:
       // If startSec is null, undefined, or NaN, this section was never reached or spoken.
       if (sec.startSec === null || sec.startSec === undefined || isNaN(Number(sec.startSec))) {
@@ -482,6 +483,15 @@
       const sEnd = Math.min(totalDuration, rawEnd + pad);
 
       if (sEnd > sStart) {
+        if (typeof onProgress === 'function') {
+          const pct = Math.min(94, Math.round(82 + ((i + 1) / effectiveSections.length) * 12));
+          onProgress({
+            phase: 'slicing',
+            percent: pct,
+            text: `Slicing take [${sec.title || sec.id}]…`,
+            timeRemaining: 'Almost done…'
+          });
+        }
         const sliceBuf = sliceAudioBuffer(audioBuffer, sStart, sEnd);
         if (sliceBuf) {
           cleanSectionBuffers.push(sliceBuf);
@@ -504,6 +514,14 @@
 
     // Concatenate clean section buffers into everything.[format]
     if (cleanSectionBuffers.length > 0) {
+      if (typeof onProgress === 'function') {
+        onProgress({
+          phase: 'master',
+          percent: 96,
+          text: 'Assembling spliced master take…',
+          timeRemaining: 'Almost done…'
+        });
+      }
       const stitchedBuf = concatAudioBuffers(cleanSectionBuffers);
       let stitchedBlob;
       if (format === 'mp3') {
@@ -697,6 +715,55 @@
     return `${prefix}-${dateStr}.${extension}`;
   }
 
+  /**
+   * Overwrites section start/end times with times measured from the audio itself
+   * (post-recording transcription). Sections missing from the map, or null, keep
+   * their live-tracked boundaries. Mutates and returns the same sections array.
+   *
+   * @param {Array<{id: string, startSec: number|null, endSec: number|null}>} sections
+   * @param {Object<string, {startSec: number, endSec: number}|null>} refined
+   */
+  function applyRefinedBoundaries(sections, refined) {
+    if (!Array.isArray(sections) || !refined) return sections;
+    for (const s of sections) {
+      const r = refined[s.id];
+      if (r && isFinite(Number(r.startSec)) && isFinite(Number(r.endSec)) && Number(r.endSec) > Number(r.startSec)) {
+        s.startSec = Number(r.startSec);
+        s.endSec = Number(r.endSec);
+      }
+    }
+    return sections;
+  }
+
+  /**
+   * Downmixes an AudioBuffer to mono and resamples it to 16 kHz signed 16-bit PCM
+   * (what the server-side Whisper pass expects). Box-averages when downsampling.
+   * @returns {Int16Array}
+   */
+  function audioBufferToPcm16k(audioBuffer) {
+    const targetRate = 16000;
+    const channels = audioBuffer.numberOfChannels;
+    const srcRate = audioBuffer.sampleRate;
+    const len = audioBuffer.length;
+    const mono = new Float32Array(len);
+    for (let c = 0; c < channels; c++) {
+      const data = audioBuffer.getChannelData(c);
+      for (let i = 0; i < len; i++) mono[i] += data[i] / channels;
+    }
+    const ratio = srcRate / targetRate;
+    const outLen = Math.floor(len / ratio);
+    const out = new Int16Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+      const start = Math.floor(i * ratio);
+      const end = Math.min(len, Math.max(start + 1, Math.floor((i + 1) * ratio)));
+      let sum = 0;
+      for (let j = start; j < end; j++) sum += mono[j];
+      const v = Math.max(-1, Math.min(1, sum / (end - start)));
+      out[i] = v < 0 ? v * 32768 : v * 32767;
+    }
+    return out;
+  }
+
 
   // =========================================================================
   // RecordingFinalizer (C2) — finalizeRecording(chunks, opts) → TakeSet
@@ -718,6 +785,7 @@
       sections = [],
       sessionDurationSec = 0,
       onProgress = null,
+      refineBoundaries = null,
     } = opts;
 
     const recordedBlob = new Blob(chunks, { type: mimeType });
@@ -727,7 +795,12 @@
     // ---- Audio encode / decode path (WAV or MP3) ----------------------------
     if (isAudioOnly && (audioFormat === 'wav' || audioFormat === 'mp3')) {
       if (typeof onProgress === 'function') {
-        onProgress(`Processing ${audioFormat.toUpperCase()} audio…`);
+        onProgress({
+          phase: 'decode',
+          percent: 8,
+          text: `Preparing ${audioFormat.toUpperCase()} audio…`,
+          timeRemaining: 'Estimating…'
+        });
       }
 
       const arrayBuffer = await recordedBlob.arrayBuffer();
@@ -760,9 +833,31 @@
         let takes = null;
         if (sections.length > 0) {
           if (typeof onProgress === 'function') {
-            onProgress('Extracting clean section takes…');
+            onProgress({
+              phase: 'refining',
+              percent: 14,
+              text: 'Analyzing speech for clean cuts…',
+              timeRemaining: 'Estimating…'
+            });
           }
-          const result = processAudioTakes(audioBuffer, sections, audioFormat);
+          // Optional: replace live-tracked boundaries with times measured from the
+          // recorded audio itself. Any failure keeps the live boundaries.
+          if (typeof refineBoundaries === 'function') {
+            try {
+              if (typeof onProgress === 'function') {
+                onProgress({
+                  phase: 'refining',
+                  percent: 15,
+                  text: 'Refining cuts with full transcription…',
+                  timeRemaining: 'Estimating…'
+                });
+              }
+              applyRefinedBoundaries(sections, await refineBoundaries(audioBuffer, sections, onProgress));
+            } catch (refineErr) {
+              console.warn('Boundary refinement failed, using live boundaries:', refineErr);
+            }
+          }
+          const result = processAudioTakes(audioBuffer, sections, audioFormat, 0.25, onProgress);
           takes = (result && result.takes && result.takes.length > 0) ? result.takes : null;
         }
 
@@ -815,6 +910,21 @@
 
 
   // =========================================================================
+  // Media Formats & Presets
+  // =========================================================================
+
+  const VIDEO_FORMATS = [
+    { id: 'mp4', label: 'MP4 (.mp4)', desc: 'Universal MP4 video format (H.264/AAC)' },
+    { id: 'webm', label: 'WebM (.webm)', desc: 'High-efficiency WebM video format (VP9/Opus)' },
+  ];
+
+  const AUDIO_FORMATS = [
+    { id: 'wav', label: 'WAV (.wav)', desc: 'Lossless 16-bit PCM WAV — recommended for multi-section recordings (studio quality, uncompressed)' },
+    { id: 'mp3', label: 'MP3 (.mp3)', desc: 'Compressed MP3 audio (192 kbps) — may cause section splitting issues on slower machines' },
+    { id: 'webm', label: 'WebM (.webm)', desc: 'WebM Opus compressed audio' },
+  ];
+
+  // =========================================================================
   // MediaSession Coordinator Class
   // =========================================================================
 
@@ -836,11 +946,17 @@
       this.mediaRecorder = null;
       this.recordedChunks = [];
       this.activeRecordingOptions = null;
-      this.activeRecordMode = 'video';
-      this.activeAudioFormat = 'mp3';
-      this.activeVideoFormat = 'mp4';
+      this.activeRecordMode = options.activeRecordMode || 'video';
+      this.activeAudioFormat = options.activeAudioFormat || 'wav';
+      this.activeVideoFormat = options.activeVideoFormat || 'mp4';
 
-      this.activeAudioSourceName = null;
+      this.activeAudioSource = options.activeAudioSource || 'browser';
+      this.activeAudioSourceName = options.activeAudioSourceName || null;
+      this.availableAudioDevices = [];
+      this.configStore = options.configStore || null;
+      this.ui = {};
+      this.callbacks = {};
+
       this.vuLoopStarted = false;
       this.lastLocalLevelTime = 0;
 
@@ -849,6 +965,241 @@
       this.onVuLevel = null;   // (levelPercent) => void
       this.onError = null;     // (err) => void
       this.onDeviceChanged = null; // (label) => void
+    }
+
+    /**
+     * Binds UI controls (audio source dropdowns, record mode/format options) and attaches event handlers.
+     */
+    bindUI(elements = {}, callbacks = {}) {
+      this.ui = elements;
+      this.callbacks = callbacks;
+
+      const { optAudioSource, btnRefreshAudioDevices, optRecordMode, optRecordFormat } = elements;
+
+      if (optAudioSource) {
+        optAudioSource.addEventListener('change', async (e) => {
+          const devId = e.target.value;
+          this.activeAudioSource = devId;
+          try {
+            if (typeof localStorage !== 'undefined') {
+              localStorage.setItem('teleprompter_audio_device', devId);
+            }
+          } catch (_) {}
+
+          const matchedDev = this.availableAudioDevices.find((d) => String(d.id) === String(devId));
+          const targetName = matchedDev ? (matchedDev.raw_name || matchedDev.name) : null;
+          if (targetName) {
+            this.activeAudioSourceName = targetName;
+            try {
+              if (typeof localStorage !== 'undefined') {
+                localStorage.setItem('teleprompter_audio_device_name', targetName);
+              }
+            } catch (_) {}
+            if (this.configStore) {
+              this.configStore.update('audio', {
+                source_type: devId === 'browser' ? 'browser' : 'hardware',
+                device_id: devId === 'browser' ? null : String(devId),
+                device_name: targetName
+              });
+            }
+          }
+
+          this.updateAudioSourceUI(devId);
+
+          if (typeof callbacks.onDeviceSelect === 'function') {
+            await callbacks.onDeviceSelect(devId, targetName);
+          }
+        });
+      }
+
+      if (btnRefreshAudioDevices) {
+        btnRefreshAudioDevices.addEventListener('click', async () => {
+          btnRefreshAudioDevices.classList.add('opacity-50');
+          if (typeof callbacks.onRefreshDevices === 'function') {
+            await callbacks.onRefreshDevices();
+          }
+          setTimeout(() => btnRefreshAudioDevices.classList.remove('opacity-50'), 400);
+        });
+      }
+
+      if (optRecordMode) {
+        optRecordMode.addEventListener('change', () => {
+          this.updateFormatUI();
+        });
+      }
+
+      if (optRecordFormat) {
+        optRecordFormat.addEventListener('change', (e) => {
+          const mode = (optRecordMode && optRecordMode.value) ? optRecordMode.value : this.activeRecordMode;
+          if (mode === 'video') {
+            this.activeVideoFormat = e.target.value;
+            try {
+              if (typeof localStorage !== 'undefined') {
+                localStorage.setItem('teleprompter_video_format', this.activeVideoFormat);
+              }
+            } catch (_) {}
+          } else {
+            this.activeAudioFormat = e.target.value;
+            try {
+              if (typeof localStorage !== 'undefined') {
+                localStorage.setItem('teleprompter_audio_format', this.activeAudioFormat);
+              }
+            } catch (_) {}
+          }
+          if (this.configStore) {
+            this.configStore.update('recording', {
+              mode: this.activeRecordMode,
+              video_format: this.activeVideoFormat,
+              audio_format: this.activeAudioFormat
+            });
+          }
+          const formats = mode === 'video' ? VIDEO_FORMATS : AUDIO_FORMATS;
+          const chosen = formats.find((f) => f.id === e.target.value);
+          if (this.ui.formatDesc && chosen) {
+            this.ui.formatDesc.textContent = chosen.desc;
+          }
+          // Show/hide MP3 splitting warning
+          const existingWarn = this.ui.formatSelect && this.ui.formatSelect.parentNode
+            ? this.ui.formatSelect.parentNode.querySelector('.mp3-split-warning')
+            : null;
+          if (mode === 'audio' && e.target.value === 'mp3') {
+            if (!existingWarn && this.ui.formatSelect && this.ui.formatSelect.parentNode) {
+              const warn = document.createElement('p');
+              warn.className = 'mp3-split-warning text-[10px] text-amber-400 leading-snug mt-1 flex items-start gap-1';
+              warn.innerHTML = '<svg class="w-3 h-3 shrink-0 mt-px text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg><span>MP3 encoding can take 1–5 seconds per section on slower machines, which may cause section take splitting to fail. WAV is recommended for multi-section recordings.</span>';
+              this.ui.formatSelect.parentNode.appendChild(warn);
+            }
+          } else {
+            if (existingWarn) existingWarn.remove();
+          }
+          if (typeof callbacks.onFormatChange === 'function') {
+            callbacks.onFormatChange(this.activeRecordMode, this.activeVideoFormat, this.activeAudioFormat);
+          }
+        });
+      }
+
+      if (optRecordMode && this.activeRecordMode) {
+        optRecordMode.value = this.activeRecordMode;
+      }
+      this.updateFormatUI();
+      this.updateAudioSourceUI(this.activeAudioSource);
+    }
+
+    /**
+     * Updates device dropdown and badge/description displays.
+     */
+    updateAudioSourceUI(deviceId, devicesList) {
+      if (devicesList && devicesList.length) {
+        this.availableAudioDevices = devicesList;
+        if (this.ui.optAudioSource && typeof document !== 'undefined') {
+          this.ui.optAudioSource.innerHTML = '';
+          devicesList.forEach((d) => {
+            const opt = document.createElement('option');
+            opt.value = d.id;
+            opt.textContent = d.name;
+            if (d.raw_name) opt.dataset.rawName = d.raw_name;
+            if (String(d.id) === String(deviceId)) opt.selected = true;
+            this.ui.optAudioSource.appendChild(opt);
+          });
+        }
+      }
+
+      if (deviceId !== undefined && deviceId !== null) {
+        this.activeAudioSource = String(deviceId);
+      }
+
+      if (this.ui.optAudioSource && this.activeAudioSource) {
+        this.ui.optAudioSource.value = this.activeAudioSource;
+      }
+
+      const matchedDev = this.availableAudioDevices.find((d) => String(d.id) === String(this.activeAudioSource));
+      if (matchedDev && (matchedDev.raw_name || matchedDev.name)) {
+        this.activeAudioSourceName = matchedDev.raw_name || matchedDev.name;
+        try {
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('teleprompter_audio_device_name', this.activeAudioSourceName);
+          }
+        } catch (_) {}
+      }
+
+      const isBrowser = this.activeAudioSource === 'browser';
+      if (this.ui.audioSourceBadge) {
+        const devName = matchedDev ? (matchedDev.raw_name || matchedDev.name).replace(/\s*\(System Default\)\s*/i, '') : '';
+        this.ui.audioSourceBadge.textContent = isBrowser ? 'Browser Mic' : (devName || 'Hardware Mic');
+        this.ui.audioSourceBadge.className = 'text-[10px] px-1.5 py-0.5 rounded font-mono border ' +
+          (isBrowser ? 'bg-green-950 text-green-300 border-green-700/50' : 'bg-indigo-950 text-indigo-300 border-indigo-700/50');
+      }
+
+      if (this.ui.audioSourceDesc) {
+        const devName = matchedDev ? (matchedDev.raw_name || matchedDev.name).replace(/\s*\(System Default\)\s*/i, '') : 'selected mic';
+        this.ui.audioSourceDesc.textContent = isBrowser
+          ? 'Streams directly from your active browser tab mic (matches VU meter).'
+          : `Backend captures directly from ${devName} for Whisper. Browser records & monitors ${devName}.`;
+      }
+
+      if (this.ui.vuSource) {
+        const devName = matchedDev ? (matchedDev.raw_name || matchedDev.name).replace(/\s*\(System Default\)\s*/i, '') : (isBrowser ? 'Browser' : 'Mic');
+        this.ui.vuSource.textContent = devName;
+      }
+    }
+
+    /**
+     * Updates record mode and audio/video format selectors and UI descriptions.
+     */
+    updateFormatUI() {
+      const mode = (this.ui.optRecordMode && this.ui.optRecordMode.value) ? this.ui.optRecordMode.value : this.activeRecordMode;
+      this.activeRecordMode = mode;
+
+      if (this.configStore) {
+        this.configStore.update('recording', {
+          mode: this.activeRecordMode,
+          video_format: this.activeVideoFormat,
+          audio_format: this.activeAudioFormat
+        });
+      }
+      try {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('teleprompter_record_mode', mode);
+        }
+      } catch (_) {}
+
+      if (mode === 'off') {
+        if (this.ui.recordingFormatGroup) {
+          this.ui.recordingFormatGroup.classList.add('hidden');
+        }
+      } else {
+        if (this.ui.recordingFormatGroup) {
+          this.ui.recordingFormatGroup.classList.remove('hidden');
+        }
+        if (this.ui.optRecordFormat && typeof document !== 'undefined') {
+          this.ui.optRecordFormat.innerHTML = '';
+          const formats = mode === 'video' ? VIDEO_FORMATS : AUDIO_FORMATS;
+          const currentSelected = mode === 'video' ? this.activeVideoFormat : this.activeAudioFormat;
+          formats.forEach((f) => {
+            const opt = document.createElement('option');
+            opt.value = f.id;
+            opt.textContent = f.label;
+            if (f.id === currentSelected) opt.selected = true;
+            this.ui.optRecordFormat.appendChild(opt);
+          });
+          const chosen = formats.find((f) => f.id === this.ui.optRecordFormat.value) || formats[0];
+          if (this.ui.formatDesc) {
+            this.ui.formatDesc.textContent = chosen ? chosen.desc : '';
+          }
+        }
+      }
+
+      if (typeof this.callbacks.onFormatChange === 'function') {
+        this.callbacks.onFormatChange(this.activeRecordMode, this.activeVideoFormat, this.activeAudioFormat);
+      }
+    }
+
+    /**
+     * Helper to enable/disable record mode & format dropdowns during recording.
+     */
+    setControlsDisabled(disabled) {
+      if (this.ui.optRecordMode) this.ui.optRecordMode.disabled = disabled;
+      if (this.ui.optRecordFormat) this.ui.optRecordFormat.disabled = disabled;
     }
 
     /**
@@ -1023,7 +1374,7 @@
     /**
      * Starts local media recording with high-fidelity native streams.
      */
-    async startRecording({ mode = 'video', audioFormat = 'mp3', videoFormat = 'mp4' } = {}) {
+    async startRecording({ mode = this.activeRecordMode, audioFormat = this.activeAudioFormat, videoFormat = this.activeVideoFormat } = {}) {
       this.activeRecordMode = mode;
       this.activeAudioFormat = audioFormat;
       this.activeVideoFormat = videoFormat;
@@ -1083,6 +1434,7 @@
       let sections = [];
       let sessionDurationSec = 0;
       let onProgress = null;
+      let refineBoundaries = null;
 
       if (typeof optionsOrCb === 'function') {
         onProgress = optionsOrCb;
@@ -1090,6 +1442,7 @@
         sections = Array.isArray(optionsOrCb.sections) ? optionsOrCb.sections : [];
         sessionDurationSec = Number(optionsOrCb.sessionDurationSec) || 0;
         onProgress = optionsOrCb.onProgress || optionsOrCb.onProgressCallback || null;
+        refineBoundaries = typeof optionsOrCb.refineBoundaries === 'function' ? optionsOrCb.refineBoundaries : null;
       }
 
       return new Promise((resolve, reject) => {
@@ -1115,6 +1468,7 @@
               sections,
               sessionDurationSec,
               onProgress,
+              refineBoundaries,
             });
             resolve(result);
           } catch (err) {
@@ -1193,6 +1547,9 @@
   }
 
   return {
+    // Format Presets & Options
+    VIDEO_FORMATS,
+    AUDIO_FORMATS,
     // Math & Binary Encoders
     resampleTo16k,
     floatToInt16,
@@ -1202,6 +1559,8 @@
     concatAudioBuffers,
     processAudioTakes,
     reconcileSectionBoundaries,
+    applyRefinedBoundaries,
+    audioBufferToPcm16k,
     computeCrc32,
     createZipBlob,
     getAudioRecorderOptions,

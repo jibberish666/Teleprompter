@@ -2,7 +2,7 @@
  * Unit tests for TeleprompterMedia module using Node.js built-in test runner.
  * Run with: node --test test_media.js
  */
-const { test, describe } = require('node:test');
+const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -396,4 +396,171 @@ describe('TeleprompterMedia - Section Take Slicing & Master Splicing', () => {
     assert.ok(master, 'Master take must exist');
   });
 });
+
+describe('TeleprompterMedia - MediaSession UI & Device Binding', () => {
+  function createMockElement(initialClasses = []) {
+    const classes = new Set(initialClasses);
+    const listeners = {};
+    const children = [];
+
+    let innerHtml = '';
+    const el = {
+      value: '',
+      textContent: '',
+      get innerHTML() {
+        return innerHtml;
+      },
+      set innerHTML(val) {
+        innerHtml = val;
+        if (!val) {
+          children.length = 0;
+        }
+      },
+      className: '',
+      disabled: false,
+      children,
+      appendChild: (child) => {
+        children.push(child);
+      },
+      classList: {
+        add: (...names) => names.forEach((n) => classes.add(n)),
+        remove: (...names) => names.forEach((n) => classes.delete(n)),
+        contains: (name) => classes.has(name),
+      },
+      addEventListener: (evt, fn) => {
+        listeners[evt] = listeners[evt] || [];
+        listeners[evt].push(fn);
+      },
+      dispatchEvent: (evt, payload = {}) => {
+        (listeners[evt] || []).forEach((fn) => fn(payload));
+      },
+      click: () => {
+        (listeners['click'] || []).forEach((fn) => fn({ target: el }));
+      },
+    };
+    return el;
+  }
+
+  // Setup minimal global.document.createElement for Node environment tests
+  const origDocument = global.document;
+  before(() => {
+    global.document = {
+      createElement: (tag) => {
+        const el = createMockElement();
+        el.tagName = tag.toUpperCase();
+        el.dataset = {};
+        return el;
+      },
+    };
+  });
+  after(() => {
+    global.document = origDocument;
+  });
+
+  test('exports VIDEO_FORMATS and AUDIO_FORMATS presets', () => {
+    assert.ok(Array.isArray(Media.VIDEO_FORMATS), 'VIDEO_FORMATS must be an array');
+    assert.ok(Array.isArray(Media.AUDIO_FORMATS), 'AUDIO_FORMATS must be an array');
+    assert.ok(Media.VIDEO_FORMATS.some((f) => f.id === 'mp4'));
+    assert.ok(Media.AUDIO_FORMATS.some((f) => f.id === 'mp3'));
+  });
+
+  test('bindUI binds controls, initializes dropdowns, and triggers updateFormatUI', () => {
+    const session = new Media.MediaSession({
+      activeRecordMode: 'video',
+      activeVideoFormat: 'mp4',
+      activeAudioFormat: 'mp3',
+      activeAudioSource: 'browser'
+    });
+
+    const elements = {
+      optAudioSource: createMockElement(),
+      audioSourceBadge: createMockElement(),
+      audioSourceDesc: createMockElement(),
+      vuSource: createMockElement(),
+      btnRefreshAudioDevices: createMockElement(),
+      optRecordMode: createMockElement(),
+      optRecordFormat: createMockElement(),
+      recordingFormatGroup: createMockElement(),
+      formatDesc: createMockElement(),
+    };
+
+    let formatChanged = false;
+    session.bindUI(elements, {
+      onFormatChange: (mode, vFmt, aFmt) => {
+        formatChanged = true;
+      }
+    });
+
+    assert.equal(session.activeRecordMode, 'video');
+    assert.equal(elements.optRecordFormat.children.length, 2, 'Should populate 2 video formats');
+    assert.ok(elements.formatDesc.textContent.includes('Universal MP4'));
+    assert.ok(formatChanged, 'onFormatChange should have been invoked on initial bind');
+  });
+
+  test('updateFormatUI switches formats between video, audio, and off modes', () => {
+    const session = new Media.MediaSession();
+    const elements = {
+      optRecordMode: createMockElement(),
+      optRecordFormat: createMockElement(),
+      recordingFormatGroup: createMockElement(),
+      formatDesc: createMockElement(),
+    };
+
+    session.bindUI(elements);
+
+    // Switch to audio mode
+    elements.optRecordMode.value = 'audio';
+    session.updateFormatUI();
+    assert.equal(session.activeRecordMode, 'audio');
+    assert.equal(elements.optRecordFormat.children.length, 3, 'Should populate 3 audio formats (mp3, wav, webm)');
+
+    // Switch to off mode
+    elements.optRecordMode.value = 'off';
+    session.updateFormatUI();
+    assert.equal(session.activeRecordMode, 'off');
+    assert.ok(elements.recordingFormatGroup.classList.contains('hidden'), 'Format group must be hidden when mode is off');
+  });
+
+  test('updateAudioSourceUI populates hardware devices and updates badges', () => {
+    const session = new Media.MediaSession();
+    const elements = {
+      optAudioSource: createMockElement(),
+      audioSourceBadge: createMockElement(),
+      audioSourceDesc: createMockElement(),
+      vuSource: createMockElement(),
+    };
+
+    session.bindUI(elements);
+
+    const devices = [
+      { id: 'browser', name: 'Browser Microphone', raw_name: 'Browser Microphone' },
+      { id: 'dev-1', name: 'Rode PodMic (Hardware)', raw_name: 'Rode PodMic USB' }
+    ];
+
+    session.updateAudioSourceUI('dev-1', devices);
+    assert.equal(session.activeAudioSource, 'dev-1');
+    assert.equal(session.activeAudioSourceName, 'Rode PodMic USB');
+    assert.equal(elements.optAudioSource.children.length, 2);
+    assert.equal(elements.audioSourceBadge.textContent, 'Rode PodMic USB');
+    assert.equal(elements.vuSource.textContent, 'Rode PodMic USB');
+  });
+
+  test('setControlsDisabled enables and disables record mode and format elements', () => {
+    const session = new Media.MediaSession();
+    const elements = {
+      optRecordMode: createMockElement(),
+      optRecordFormat: createMockElement(),
+    };
+
+    session.bindUI(elements);
+    session.setControlsDisabled(true);
+    assert.equal(elements.optRecordMode.disabled, true);
+    assert.equal(elements.optRecordFormat.disabled, true);
+
+    session.setControlsDisabled(false);
+    assert.equal(elements.optRecordMode.disabled, false);
+    assert.equal(elements.optRecordFormat.disabled, false);
+  });
+});
+
 

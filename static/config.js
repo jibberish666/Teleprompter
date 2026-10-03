@@ -43,7 +43,7 @@
     recording: {
       mode: 'video',          // 'video' | 'audio'
       video_format: 'mp4',    // 'mp4' | 'webm'
-      audio_format: 'mp3'     // 'mp3' | 'wav'
+      audio_format: 'wav'     // 'wav' | 'mp3' — WAV default avoids MP3 encoding latency during multi-section splitting
     },
     ui: {
       box_width_pct: 68,
@@ -179,13 +179,24 @@
       }
       if (Array.isArray(raw.script.rehearsal_words)) {
         result.script.rehearsal_words = raw.script.rehearsal_words
-          .map(w => String(w).trim().toLowerCase())
+          .map(w => {
+            if (w && typeof w === 'object') {
+              const word = String(w.word || w.clean || '').trim();
+              const clean = String(w.clean || word).trim().toLowerCase();
+              const reason = String(w.reason || 'stumbled').trim();
+              if (!word || clean === '[object object]' || word.toLowerCase() === '[object object]') return null;
+              return { word, clean, reason };
+            }
+            const s = String(w).trim();
+            if (!s || s.toLowerCase() === '[object object]') return null;
+            return s.toLowerCase();
+          })
           .filter(Boolean);
       }
       if (Array.isArray(raw.script.protected_terms)) {
         result.script.protected_terms = raw.script.protected_terms
           .map(t => String(t).trim())
-          .filter(Boolean);
+          .filter(t => t && t.toLowerCase() !== '[object object]');
       }
     }
 
@@ -202,7 +213,19 @@
       const existing = storage.getItem(STORAGE_KEY);
       if (existing) {
         const parsed = JSON.parse(existing);
-        return validateAndSanitize(parsed);
+        const validated = validateAndSanitize(parsed);
+        // Fallback: If unified storage has empty saved_transcript, but legacy key has one, migrate it
+        if (!validated.script || !validated.script.saved_transcript || !validated.script.saved_transcript.trim()) {
+          const legacyScript = storage.getItem('teleprompter_saved_transcript');
+          if (legacyScript && legacyScript.trim()) {
+            validated.script = validated.script || {};
+            validated.script.saved_transcript = legacyScript;
+            try {
+              storage.setItem(STORAGE_KEY, JSON.stringify(validated));
+            } catch (_) {}
+          }
+        }
+        return validated;
       }
     } catch (_) {
       // Malformed json in storage, fallback to migration or defaults
@@ -407,7 +430,25 @@
         for (const domain of Object.keys(DEFAULT_CONFIG)) {
           if (domain === 'version') continue;
           if (serverConfig[domain] && typeof serverConfig[domain] === 'object') {
-            merged[domain] = Object.assign({}, merged[domain], serverConfig[domain]);
+            if (domain === 'script') {
+              const clientScript = (merged.script && typeof merged.script.saved_transcript === 'string')
+                ? merged.script.saved_transcript
+                : '';
+              const serverScript = (serverConfig.script && typeof serverConfig.script.saved_transcript === 'string')
+                ? serverConfig.script.saved_transcript
+                : '';
+
+              merged[domain] = Object.assign({}, merged[domain], serverConfig[domain]);
+              // Client's active local draft takes precedence over server on connect;
+              // If client has no draft, adopt the server's persisted transcript.
+              if (clientScript && clientScript.trim()) {
+                merged.script.saved_transcript = clientScript;
+              } else if (serverScript && serverScript.trim()) {
+                merged.script.saved_transcript = serverScript;
+              }
+            } else {
+              merged[domain] = Object.assign({}, merged[domain], serverConfig[domain]);
+            }
           }
         }
 

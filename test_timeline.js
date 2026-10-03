@@ -182,7 +182,8 @@ describe('TeleprompterTimeline - Section Boundary & Retake State Machine', () =>
     // Session recorded 10.0s of audio, leaving 6.0s unaccounted for across sec-2 and sec-3
     const resolved = timeline.resolveBoundaries(10.0);
 
-    assert.equal(resolved[0].startSec, 1.0);
+    // Section 1 startSec is always anchored to 0 by resolveBoundaries
+    assert.equal(resolved[0].startSec, 0);
     assert.equal(resolved[0].endSec, 4.0);
 
     // sec-2 gets 4.0 to 7.0 (3.0s slice)
@@ -203,9 +204,93 @@ describe('TeleprompterTimeline - Section Boundary & Retake State Machine', () =>
     // Session ended exactly when Section 1 ended
     const resolved = timeline.resolveBoundaries(5.0);
 
-    assert.equal(resolved[0].startSec, 1.0);
+    // Section 1 startSec is always anchored to 0 by resolveBoundaries
+    assert.equal(resolved[0].startSec, 0);
     assert.equal(resolved[0].endSec, 5.0);
     assert.equal(resolved[1].startSec, null);
     assert.equal(resolved[1].endSec, null);
+  });
+
+  test('resolveBoundaries anchors Section 1 startSec to 0 when Whisper CPU latency caused late recognition (real-world regression)', () => {
+    // Reproduces the exact failure observed in the field:
+    // totalSessionSec=18.583s, speaker read each section for ~12s.
+    // Whisper on CPU ran ~15s behind: first Section 1 token arrived at t=14.989s.
+    // Without anchor: Section 1 sliced to [14.989, 16.989] = 2.0s (missing 12s of speech).
+    // With anchor: Section 1 sliced from t=0, capturing the full recording.
+    sampleSections[0].startSec = 14.989; // Whisper's late recognition stamp
+    sampleSections[0].endSec = 16.989;
+    sampleSections[0]._lastSeenSec = 15.089;
+    sampleSections[1].startSec = 16.161;
+    sampleSections[1].endSec = 18.583;
+    sampleSections[1]._lastSeenSec = 17.930;
+
+    const resolved = timeline.resolveBoundaries(18.583);
+
+    // Section 1 MUST be anchored to 0, not left at 14.989
+    assert.equal(resolved[0].startSec, 0,
+      'Section 1 startSec must be anchored to 0 — Whisper latency must not collapse the take window');
+    assert.equal(resolved[0].endSec, 16.989, 'Section 1 endSec unchanged');
+    assert.ok(resolved[0].endSec - resolved[0].startSec >= 12.0,
+      `Section 1 duration must cover ~12s of spoken audio, got: ${resolved[0].endSec - resolved[0].startSec}s`);
+
+    // Section 2 boundaries should be preserved
+    assert.equal(resolved[1].startSec, 16.161);
+    assert.equal(resolved[1].endSec, 18.583);
+  });
+
+  test('caps cadence lookback and enforces duration floor preventing section collapse on delayed speech recognition', () => {
+    // Section 1 has 10 words (startIndex: 0, endIndex: 9)
+    sampleSections[0].startIndex = 0;
+    sampleSections[0].endIndex = 9;
+
+    // Speaker starts Section 1 at t=1.0s and speaks until t=7.0s
+    elapsedSec = 1.0;
+    timeline.wordSeen({ sectionId: 'sec-1', original: 'Welcome', globalIdx: 0 }, true);
+    assert.equal(sampleSections[0].startSec, 0.9);
+
+    elapsedSec = 7.0;
+    timeline.wordSeen({ sectionId: 'sec-1', original: 'LastWord', globalIdx: 9 }, true);
+
+    // Section 2 first recognized word at t=7.5s, but Whisper skips 15 words deep (globalIdx: 65, startIndex: 50)
+    // Without lookback capping, lookback would be 15 * 0.4s = 6.0s => 7.5 - 6.0 = 1.5s, collapsing Section 1.
+    // With capping to 1.2s max, lookback is at most 1.2s => 7.5 - 1.2 = 6.3s.
+    // Furthermore, duration floor ensures Section 1 endSec is at least its last seen word (7.0s).
+    elapsedSec = 7.5;
+    timeline.wordSeen({ sectionId: 'sec-2', original: 'DeepWord', globalIdx: 65 }, true);
+
+    assert.equal(timeline.activeId, 'sec-2');
+    assert.ok(sampleSections[0].endSec >= 7.0, `Section 1 endSec (${sampleSections[0].endSec}) must not collapse below spoken duration floor (7.0s)`);
+    assert.ok(sampleSections[0].endSec - sampleSections[0].startSec >= 6.0, 'Section 1 must retain full spoken duration');
+  });
+
+  test('startup highlight call with isSessionActive=false must NOT freeze Section 1 startSec at t≈0', () => {
+    // Simulates app.js calling updateHighlighting(0) at session start (t≈0.001s)
+    // with isPrompting temporarily set to false — wordSeen must skip all timestamp mutations.
+    elapsedSec = 0.001; // t≈0 just after sessionStartTime assigned
+
+    // This mirrors the startup positional-only call (isSessionActive=false guard)
+    timeline.wordSeen({ sectionId: 'sec-1', original: 'Welcome', globalIdx: 0 }, false /* isSessionActive=false */);
+
+    // startSec must remain null — no timestamp frozen at startup
+    assert.equal(sampleSections[0].startSec, null,
+      'Section 1 startSec must not be stamped at t≈0 by the startup positioning call');
+    assert.equal(sampleSections[0]._lastSeenSec, null,
+      'Section 1 _lastSeenSec must not be stamped at t≈0 by the startup positioning call');
+
+    // Now real speech arrives at t=3.5s — startSec must be stamped correctly
+    elapsedSec = 3.5;
+    timeline.wordSeen({ sectionId: 'sec-1', original: 'Welcome', globalIdx: 0 }, true /* isSessionActive=true */);
+
+    assert.equal(sampleSections[0].startSec, 3.4,
+      'Section 1 startSec must be stamped from first real spoken word, not from startup positioning call');
+    assert.equal(sampleSections[0]._lastSeenSec, 3.5);
+
+    // Section 2 arrives at t=12.0s — Section 1 end boundary must reflect actual spoken duration, not t≈0 start
+    elapsedSec = 12.0;
+    timeline.wordSeen({ sectionId: 'sec-2', original: 'Next', globalIdx: 50 }, true);
+
+    assert.equal(sampleSections[0].endSec, 12.0);
+    assert.ok(sampleSections[0].endSec - sampleSections[0].startSec >= 8.0,
+      `Section 1 must span its full spoken duration (~8.6s), not collapse to near-zero. Got: ${sampleSections[0].endSec - sampleSections[0].startSec}s`);
   });
 });
