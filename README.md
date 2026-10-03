@@ -7,15 +7,15 @@ A 100% local, speech-synchronized AI teleprompter. It captures your microphone, 
 
 Everything runs on your local machine—no cloud APIs, no accounts, and no speech/data sent anywhere.
 
-## 📢 What's New in v1.4.0
+## 📢 What's New in v1.5.0
 
-- **Trial Rehearsal Mode & Automatic Fumble Catcher**: Click the new **Rehearse** button in the top bar to run a zero-pressure dry run. The teleprompter scrolls and tracks your speech with local Whisper while **completely disabling audio/video recording**. The alignment engine automatically catches **Skipped**, **Stumbled**, and **Repeated** words, marking them directly on your prompter script as visual cues for your live recording take.
-- **Difficult Words & Custom Highlights Panel**: Accessible via **Script & Options** $\rightarrow$ **Difficult Words & Colors…**. Inspect caught trial fumbles, filter by category (*Skipped*, *Stumbled*, *Repeated*), sync filter visibility directly with the teleprompter screen, customize cue colors (6 palette swatches + custom hex color picker), and choose your highlight style (*Filled Pill*, *Text Glow*, or *Underline Accent*).
-- **Screen Space & Responsive Layout**: Adjust the prompter box width dynamically from 60% to 96% with a dedicated slider. Font size changes now dynamically scale line height (`getLineHeightForFontSize`) and scroll offsets, and the active highlight bar cleanly adapts to the prompter width.
-- **Dynamic Programming Script Auto-Formatter**: Script auto-formatting now uses a dynamic programming algorithm to find optimal 5–8 word spoken phrases, heavily penalizing dangling prepositions and conjunctions at line ends while preserving compound terms and adding visual breath pauses.
-- **Persistent Script Input**: Scripts are automatically saved in `localStorage`, preventing lost scripts on accidental refresh or navigation.
-- **Privacy-First Camera Startup**: Camera video feed starts disabled by default upon application launch, saving resources until manually activated.
-- **Agent Text Formatter Skill**: Includes the `.agents/skills/teleprompter-text-formatter/` skill for AI agents to format text according to teleprompter delivery rules.
+- **Section-Based Audio Recording & Precision Take Slicing**: Organize your script with section tags (e.g. `[1]`, `[2]`, `[3]` or `[Intro]`, `[Body]`, `[Outro]`). As you speak, the teleprompter tracks speech progression across section boundaries in real-time, automatically slicing individual audio takes (`1.wav`, `2.wav`, etc.) while also producing a seamless full master read (`everything.wav`).
+- **Two-Pass Whisper Boundary Refinement**: After a recording take finishes, an optional full-track Whisper transcription pass (`refine.py`) matches script section boundaries against true spoken audio word timestamps, delivering millisecond-accurate section cuts and eliminating live streaming drift.
+- **In-Session Section Retakes (`R` key)**: Flubbed a line? Press `R` or click **Retake** during recording to immediately restart the active section. The system automatically rewinds the prompter and replaces the previous pass of that section.
+- **Multi-File Export & In-Browser ZIP Archive**: Export all sliced takes directly into a chosen folder using the **File System Access API** (zero download clutter), or bundle them into a single timestamped `.zip` archive generated right inside your browser.
+- **Interactive Progress Bar Modal**: Real-time visual progress updates and spinner during post-recording processing steps: audio downsampling, Whisper refinement, section slicing, and export encoding.
+- **Fullscreen Script Editor & Highlight Management**: Dedicated modal script editor with live stats (word count, estimated speaking duration, section count) and a one-click **Clear Highlights** button to reset rehearsal cues without affecting script text.
+- **Modular Frontend Architecture**: Decoupled, single-responsibility modules (`timeline.js`, `media.js`, `export.js`, `formatter.js`, `cues.js`, `viewport.js`, `script_editor.js`, `server_control.js`, `config.js`) covered by over 220 automated unit and integration tests.
 - See full notes in [CHANGELOG.md](file:///Users/philkershaw/Documents/work/Tools/teleprompter/CHANGELOG.md) or the [Releases Page](https://github.com/jibberish666/Teleprompter/releases).
 
 ---
@@ -84,9 +84,26 @@ python server.py
    - Any stumbled, skipped, or repeated words are caught automatically and highlighted directly on your script as visual cues.
 6. **Customize Cues & Difficult Words**:
    - Open **Script & Options** $\rightarrow$ **Difficult Words & Colors…** to review detected fumbles, filter by tag (*Skipped*, *Stumbled*, *Repeated*), and customize highlight styling (*Filled Pill*, *Text Glow*, or *Underline Accent*).
-7. **Record Live Take**:
-   - Click **Start Session** when ready. Speak naturally—the teleprompter scrolls in real-time with your voice while keeping your rehearsal warning cues visible.
-   - Click **Stop & Save** to download your session recording immediately (saved with a timestamped filename like `teleprompter_2026-09-04_17-15-00.mp4`).
+7. **Record Live Take & Automatic Slicing**:
+   - Organize your text with section tags like `[1]`, `[2]`, `[3]` or `[Intro]`, `[Body]`, `[Outro]`.
+   - Click **Start Session** when ready. Speak naturally—the teleprompter scrolls in real-time with your voice.
+   - If you stumble during a section, tap **`R`** (or click **Retake**) to restart the current section without stopping the session.
+   - Click **Stop & Save** when finished. The system downsamples the audio, optionally refines section boundaries using full-file Whisper word timestamps, and slices individual takes (`1.wav`, `2.wav`) plus a master track (`everything.wav`).
+   - Choose to save all takes directly to a selected folder (via File System Access API) or download a bundled `.zip` archive.
+
+---
+
+## ✂️ Section Recording, In-Session Retakes & Take Slicing
+
+Writing video scripts or voiceover reads in distinct sections makes recording far more manageable:
+
+- **Section Markup**: Add bracketed headers like `[1]`, `[2]`, `[3]`, or `[Intro]`, `[Main Feature]`, `[Call to Action]` anywhere in your script. The teleprompter automatically recognizes them as discrete takes.
+- **Real-Time Section Timeline (`static/timeline.js`)**: As you read across section boundaries, the system timestamps start and end boundaries with cadence lookback protection (ensuring delayed speech recognition never truncates the opening words of a section).
+- **One-Key Retakes (`R` Hotkey)**: If you flub a take mid-session, hit **`R`** on your keyboard (or click the **Retake** button). The prompter instantly resets that section's boundary timer and rewinds your reading cursor back to the start of the current section.
+- **Two-Pass Whisper Boundary Refinement (`refine.py`)**: When your recording ends, the browser can send the complete recorded audio to the local Whisper engine for a high-accuracy timestamp pass. It matches your script boundaries to exact word audio timestamps down to the millisecond, correcting any live streaming latency.
+- **Multi-File Export (`static/export.js`)**:
+  - **Direct Folder Export**: Uses the modern browser **File System Access API** (`showDirectoryPicker`) to write all section files directly into a folder on your drive with zero browser download popups.
+  - **In-Browser PKZIP**: Assembles all individual takes and the complete session audio into a timestamped `.zip` file using a fast, native client-side ZIP generator.
 
 ---
 
@@ -106,12 +123,16 @@ Rehearsal Mode is designed for zero-pressure practice before hitting record:
   - **Custom Color Swatches**: Select from 6 vibrant color palettes (Amber, Coral/Rose, Emerald, Cyan, Fuchsia, Gold) or enter an arbitrary hex color.
   - **Styling Treatments**: Choose between **Filled Pill** badge, **Text Glow**, or **Underline Accent** for script cues.
   - **Manual Difficult Words**: Type or batch-paste complex vocabulary or technical terms into the dialog to highlight them alongside rehearsal fumbles.
+  - **Clear Highlights**: One-click action to clear all visual rehearsal cues without modifying the script text.
 
 ---
 
 ## 🎛️ Keyboard & UI Controls
 
+- **`R` Key / Retake Button**: Rewind and re-record the current active section during a live recording session.
 - **Rehearse Button**: Start a trial read-through without saving recording files, capturing fumbles in real time.
+- **Edit Script Modal**: Open the fullscreen script editor with live stats (word count, reading duration, section count).
+- **Clear Highlights**: Instantly clear rehearsal fumbles and highlight cues from the text display.
 - **Difficult Words & Colors**: Open the configuration panel to review fumbles, filter categories, and change cue styling.
 - **Prompter Box Width Slider**: Adjust prompter reading width dynamically between 60% and 96% (saved in `localStorage`).
 - **Auto-Format Script**: Click **Auto-Format** in the transcript panel to break paragraphs into 5–8 word rhythmic phrases with breath pauses.
@@ -127,14 +148,14 @@ Rehearsal Mode is designed for zero-pressure practice before hitting record:
 
 ## 🧪 Automated Testing
 
-A dedicated test suite tests the alignment logic, multi-word lookahead confirmation, compound words, morphological inflections, rehearsal mode metrics, and real-session playback:
+The project includes automated test suites covering speech alignment, multi-word lookahead confirmation, rehearsal telemetry, section timeline state machines, audio slicing, and export adapters:
 
 ```bash
-# Run test suite
-python3 test_aligner.py
-# or using the virtual environment:
-.venv/bin/python3 test_aligner.py
-```
+# Run backend Python tests (89 tests)
+.venv/bin/python -m unittest discover -p "test_*.py"
+
+# Run frontend JavaScript test suite (135 tests)
+node --test test_*.js
 
 ---
 
@@ -189,12 +210,29 @@ By default on macOS, hardware audio devices can experience exclusivity or sample
 ## 📁 Repository Structure
 
 ```
-server.py            # Main server CLI, HTTP & WebSocket server
+server.py            # Main server CLI, HTTP & WebSocket SyncHub broadcaster
+session.py           # PrompterSession coordinating transcriber, aligner, audio & clients
 audio_capture.py     # sounddevice InputStream, ring buffer & dynamic device routing
-transcriber.py       # faster-whisper inference engine & profile manager
-aligner.py           # Redesigned locality-first fuzzy word aligner with lookahead verification
-test_aligner.py      # Test suite (21 unit & real-session playback tests)
-static/              # Web UI (index.html, app.js, style.css, favicons, encoders)
+transcriber.py       # faster-whisper real-time inference loop & transcribe_full
+refine.py            # Post-recording section alignment with word-level Whisper timestamps
+aligner.py           # Locality-first fuzzy word aligner with multi-word lookahead
+telemetry.py         # Rehearsal metrics observer (detects skipped, stumbled, repeated words)
+config.py            # Atomic configuration manager and persistence (teleprompter.json)
+test_*.py            # Python backend test suite (89 unit and playback simulation tests)
+test_*.js            # Frontend JavaScript test suite (135 tests)
+static/              # Modular Web UI frontend
+├── index.html       # Prompter markup, dialog shells, and modals
+├── app.js           # UI coordinator, WebSocket dispatcher & lifecycle
+├── timeline.js      # SectionTimeline state machine & boundary lookback resolution
+├── media.js         # MediaSession, Web Audio graph, take slicing & buffer encoding
+├── export.js        # File System Access API & in-browser PKZIP export adapters
+├── formatter.js     # Cadence chunking & natural breath pause insertion
+├── cues.js          # Rehearsal fumble tracking & visual cue markers
+├── viewport.js      # Dynamic typography geometry & smooth scroll interpolation
+├── script_editor.js # Script editor modal controller with live stats
+├── server_control.js# Server restart & shutdown controller
+├── config.js        # Reactive client-side configuration store
+└── style.css        # Responsive stylesheet
 teleprompter.command # macOS double-clickable launcher
 run.sh               # Shell startup script
 .agents/             # Agent skills and audio tracking reference documentation

@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.5.0] - 2026-10-03
+
+### ✂️ Section-Based Recording & Automated Take Slicing
+- **Automatic Section Detection**: Scripts partitioned with markdown section tags (e.g., `[1]`, `[2]`, `[3]`, or `[Intro]`, `[Body]`, `[Outro]`) are automatically detected and mapped to individual takes.
+- **Real-Time Section Timeline (`static/timeline.js`)**: Tracks speaker progress across section boundaries during live recording with intelligent cadence lookback, duration clamping, and dwell guards to eliminate premature cuts or missed openings.
+- **Section Retakes (`R` Hotkey & UI)**: Easily redo the active section on the fly without stopping the session; the timeline automatically discards previous passes of the current section and rewinds to the section start.
+- **Automated Audio Slicing & Master Assembly (`static/media.js`)**: Automatically extracts individual audio takes for every section (`1.wav`, `2.wav`, etc.) while seamlessly assembling a full uninterrupted master take (`everything.wav`).
+
+### 🎯 Two-Pass Whisper Boundary Refinement (`refine.py`)
+- **Word-Accurate Post-Processing**: After recording stops, raw audio can be processed via a secondary, unconstrained Whisper pass with exact word timestamps (`transcriber.transcribe_full`).
+- **Section Timestamp Alignment**: Matches script boundary words to exact spoken audio time offsets, refining section boundaries to millisecond precision and correcting any real-time streaming drift.
+- **Graceful Fallback**: If post-processing is bypassed or cannot resolve a boundary, the system seamlessly falls back to the live `SectionTimeline` boundary markers.
+
+### 📊 Real-Time Processing Progress Modal
+- **Interactive Visual Status**: Added a dedicated progress dialog with a live status bar, percentage indicator, and animated spinner to provide clear feedback during post-session audio downsampling, Whisper refinement, section slicing, and ZIP encoding.
+
+### 💾 Flexible Multi-Format Export Options (`static/export.js`)
+- **Direct Folder Export (File System Access API)**: Select a target directory on your machine to save all section takes and master audio files directly to disk without individual download prompts.
+- **In-Browser PKZIP Packaging**: Bundles all discrete takes and master recordings into a clean, timestamped `.zip` archive using a fast, zero-dependency client-side ZIP builder.
+- **Standard Browser Download**: Seamless fallback download for environments without File System Access API support.
+
+### 📝 Script Editor & Highlight Management
+- **Fullscreen Script Editor Modal (`static/script_editor.js`)**: In-depth script editor featuring real-time statistics (word count, estimated speaking duration, section count) and dynamic font size adjustments.
+- **One-Click Clear Highlights**: Dedicated action button to clear rehearsal fumbles and visual cues from the script without altering the text.
+
+### 🧩 Modular Architecture & Expanded Test Suite
+- **Modular Component Architecture**: Extracted monolithic frontend code into dedicated, single-responsibility modules: `timeline.js`, `media.js`, `export.js`, `formatter.js`, `cues.js`, `viewport.js`, `script_editor.js`, and `server_control.js`.
+- **Comprehensive Test Coverage**: Expanded automated testing with over 135 frontend unit/simulation tests and 89 backend tests covering section boundaries, audio slicing, ZIP compression, Whisper refinement, and audio downsampling.
+
 ## [v1.4.0] - 2026-09-04
 
 ### 🎭 Trial Rehearsal Mode & Fumble Catcher
