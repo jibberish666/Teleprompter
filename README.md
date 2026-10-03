@@ -7,15 +7,15 @@ A 100% local, speech-synchronized AI teleprompter. It captures your microphone, 
 
 Everything runs on your local machine—no cloud APIs, no accounts, and no speech/data sent anywhere.
 
-## 📢 What's New in v1.5.0
+## 📢 What's New in v1.5.1
 
-- **Section-Based Audio Recording & Precision Take Slicing**: Organize your script with section tags (e.g. `[1]`, `[2]`, `[3]` or `[Intro]`, `[Body]`, `[Outro]`). As you speak, the teleprompter tracks speech progression across section boundaries in real-time, automatically slicing individual audio takes (`1.wav`, `2.wav`, etc.) while also producing a seamless full master read (`everything.wav`).
-- **Two-Pass Whisper Boundary Refinement**: After a recording take finishes, an optional full-track Whisper transcription pass (`refine.py`) matches script section boundaries against true spoken audio word timestamps, delivering millisecond-accurate section cuts and eliminating live streaming drift.
-- **In-Session Section Retakes (`R` key)**: Flubbed a line? Press `R` or click **Retake** during recording to immediately restart the active section. The system automatically rewinds the prompter and replaces the previous pass of that section.
-- **Multi-File Export & In-Browser ZIP Archive**: Export all sliced takes directly into a chosen folder using the **File System Access API** (zero download clutter), or bundle them into a single timestamped `.zip` archive generated right inside your browser.
-- **Interactive Progress Bar Modal**: Real-time visual progress updates and spinner during post-recording processing steps: audio downsampling, Whisper refinement, section slicing, and export encoding.
-- **Fullscreen Script Editor & Highlight Management**: Dedicated modal script editor with live stats (word count, estimated speaking duration, section count) and a one-click **Clear Highlights** button to reset rehearsal cues without affecting script text.
-- **Modular Frontend Architecture**: Decoupled, single-responsibility modules (`timeline.js`, `media.js`, `export.js`, `formatter.js`, `cues.js`, `viewport.js`, `script_editor.js`, `server_control.js`, `config.js`) covered by over 220 automated unit and integration tests.
+- **Seamless Spliced Master Audio (De-Overlapping)**: Resolved section boundary stutter and echo artifacts (such as repeated word fragments like "Evo-o"). The master track assembly (`processAudioTakes`) intelligently de-overlaps adjacent padded segments so continuous master recordings (`everything.wav`, `everything.mp3`) play smoothly without audio repeats, while discrete section takes retain safety padding (±0.25s) to guarantee no words are clipped.
+- **Interactive Master End Trimming**: Added a dedicated **Trim Master End** modal to the export dialog. Adjust audio cutoff from 0.0s to 1.0s in 0.1s increments with real-time auditioning (`▶ Play from last 3 seconds`), auto-replay on release, and persistent preferences.
+- **Multi-Epoch Retake Boundary Refinement**: Upgraded two-pass Whisper boundary post-processing (`refine.py`) to partition audio into temporal epochs bounded by `retakeSec`. Words spoken during aborted takes are completely isolated and excluded from matching.
+- **Section-Based Audio Recording & Precision Take Slicing**: Divide scripts with markdown section tags (e.g. `[1]`, `[2]`, `[3]` or `[Intro]`, `[Body]`, `[Outro]`) to automatically track boundaries and slice discrete audio takes alongside a full master read.
+- **Multi-File Export & Browser PKZIP Archive**: Save sliced takes directly to disk via the **File System Access API** without download prompts, or bundle all takes into a timestamped `.zip` archive generated right inside your browser.
+- **CMX 3600 EDL Export**: Generates industry-standard Edit Decision Lists (EDLs) with SMPTE timecode calculations for professional multi-track NLE timelines (DaVinci Resolve, Premiere Pro).
+- **Expanded Test Suite**: Full test suite expanded to **144 frontend Node.js tests** and **90 backend Python unit tests** (234 total passing tests).
 - See full notes in [CHANGELOG.md](file:///Users/philkershaw/Documents/work/Tools/teleprompter/CHANGELOG.md) or the [Releases Page](https://github.com/jibberish666/Teleprompter/releases).
 
 ---
@@ -131,6 +131,7 @@ Rehearsal Mode is designed for zero-pressure practice before hitting record:
 
 - **`R` Key / Retake Button**: Rewind and re-record the current active section during a live recording session.
 - **Rehearse Button**: Start a trial read-through without saving recording files, capturing fumbles in real time.
+- **Trim Master End**: Audition and adjust trailing cutoff (0.0s–1.0s) on the spliced master take directly from the export modal.
 - **Edit Script Modal**: Open the fullscreen script editor with live stats (word count, reading duration, section count).
 - **Clear Highlights**: Instantly clear rehearsal fumbles and highlight cues from the text display.
 - **Difficult Words & Colors**: Open the configuration panel to review fumbles, filter categories, and change cue styling.
@@ -151,12 +152,12 @@ Rehearsal Mode is designed for zero-pressure practice before hitting record:
 The project includes automated test suites covering speech alignment, multi-word lookahead confirmation, rehearsal telemetry, section timeline state machines, audio slicing, and export adapters:
 
 ```bash
-# Run backend Python tests (89 tests)
+# Run backend Python tests (90 tests)
 .venv/bin/python -m unittest discover -p "test_*.py"
 
-# Run frontend JavaScript test suite (135 tests)
+# Run frontend JavaScript test suite (144 tests)
 node --test test_*.js
-
+```
 ---
 
 ## ⚙️ Command-Line Options

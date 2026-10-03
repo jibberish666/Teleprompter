@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.5.1] - 2026-10-04
+
+### 🎙️ Spliced Master Take Audio De-Overlapping (`static/media.js`)
+- **Seamless Master Stitching**: Fixed an audio repetition / echo artifact at section boundaries (e.g., duplicated trailing syllables or words like "Evo-o"). Individual section takes retain generous safety padding (±0.25s) for clean standalone cuts, while master assembly (`processAudioTakes`) intelligently snaps each piece to where the previous one ended when the overlap is purely due to boundary padding.
+- **Retake Integrity**: Genuine backward jumps and retakes remain unconstrained, preserving intended timeline continuity.
+
+### ✂️ Interactive Master End Trimming (`static/export.js`, `static/index.html`)
+- **Master Trim Modal**: Added a dedicated trimming dialog accessible directly from the *Spliced Master Take* row in the export modal.
+- **Granular Slider Control**: Adjust trailing master audio cutoff from 0.0s to 1.0s in 0.1s increments (defaults to 0.0s).
+- **Live Auditioning (`▶ Play last 3 seconds`)**: Previews the final 3-second window ending at the chosen cut point, automatically synchronizing once media metadata is ready.
+- **Interactive Auto-Replay & State Persistence**: Replays the newly cut tail immediately upon slider release, with preferences persisted in `localStorage` (`teleprompter_master_trim`).
+
+### 🎯 Multi-Epoch Retake Boundary Refinement (`refine.py`, `static/timeline.js`)
+- **Retake Epoch Partitioning**: Upgraded the two-pass Whisper boundary refinement engine (`refine.py`) to partition script sections and full-recording spoken word timestamps into temporal epochs bounded by `retakeSec`. Aborted takes are fully isolated and discarded from final section cut matching.
+- **Retake Floor Anchoring**: Hardened `reconcileSectionBoundaries` in `media.js` and `SectionTimeline.retake()` in `timeline.js` to ensure retaken sections enforce their start bounds at `retakeSec` during both live tracking and fallback estimation.
+- **EDL Export Compatibility**: Added support for CMX 3600 Edit Decision Lists (EDL) with SMPTE timecode calculations for multi-track video editing.
+
+### 🧪 Expanded Test Suite
+- Automated test coverage expanded to **144 frontend Node.js tests** across 42 suites and **90 backend Python unit tests** (234 total passing tests).
+
 ## [v1.5.0] - 2026-10-03
 
 ### ✂️ Section-Based Recording & Automated Take Slicing
