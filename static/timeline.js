@@ -82,6 +82,9 @@
       if (prev && prev.endSec !== null && prev.endSec !== undefined && !isNaN(Number(prev.endSec))) {
         estStart = Math.max(Number(prev.endSec), estStart);
       }
+      if (cur.retakeSec !== null && cur.retakeSec !== undefined && !isNaN(Number(cur.retakeSec))) {
+        estStart = Math.max(Number(cur.retakeSec), estStart);
+      }
       return estStart;
     }
 
@@ -178,21 +181,66 @@
     }
 
     /**
-     * Resets timestamps for the current section (or first section) and yields rewind seek target.
-     * @returns {{ seekIndex: number, title: string, id: string } | null}
+     * Resets timestamps for the target section (by ID, word index, active ID, or first section)
+     * and yields rewind seek target.
+     * Records the wall-clock retake timestamp so boundary calculations discard the aborted take.
+     * @param {number} [nowSec] - Current recording elapsed timestamp in seconds
+     * @param {string|number|Object} [targetRef] - Optional section ID, word index, or section object to target
+     * @returns {{ seekIndex: number, title: string, id: string, retakeSec: number } | null}
      */
-    retake() {
-      const target = this._sections.find((s) => s.id === this._activeId) || this._sections[0];
+    retake(nowSec, targetRef = null) {
+      let target = null;
+      if (targetRef !== null && targetRef !== undefined) {
+        if (typeof targetRef === 'string') {
+          target = this._sections.find((s) => s.id === targetRef);
+        } else if (typeof targetRef === 'number') {
+          target = this._sections.find((s) => {
+            const hasStart = s.startIndex !== null && s.startIndex !== undefined;
+            const hasEnd = s.endIndex !== null && s.endIndex !== undefined;
+            if (!hasStart) return false;
+            if (targetRef < s.startIndex) return false;
+            if (hasEnd && targetRef > s.endIndex) return false;
+            return true;
+          });
+        } else if (typeof targetRef === 'object' && targetRef.id) {
+          target = this._sections.find((s) => s.id === targetRef.id) || targetRef;
+        }
+      }
+
+      if (!target) {
+        target = this._sections.find((s) => s.id === this._activeId) || this._sections[0];
+      }
       if (!target || target.startIndex === null || target.startIndex === undefined) {
         return null;
       }
+      const elapsed = nowSec !== undefined ? Number(nowSec) : Math.max(0, Number(this._getElapsedSec()) || 0);
+
+      // If transitioning to a new active section on retake, seal previous section's endSec
+      if (this._activeId && this._activeId !== target.id) {
+        const prev = this._sections.find((s) => s.id === this._activeId);
+        if (prev && prev.startSec !== null && prev.endSec === null) {
+          const prevEnd = (prev._lastSeenSec !== null && prev._lastSeenSec !== undefined && !isNaN(Number(prev._lastSeenSec)))
+            ? Math.max(prev.startSec, Number(prev._lastSeenSec))
+            : elapsed;
+          prev.endSec = Math.max(prev.startSec, prevEnd);
+        }
+      }
+
+      this._activeId = target.id;
+      target.retakeSec = elapsed;
       target.startSec = null;
       target.endSec = null;
       target._lastSeenSec = null;
+
+      if (this._onActiveSectionChange) {
+        this._onActiveSectionChange(target);
+      }
+
       return {
         seekIndex: target.startIndex,
         title: target.title || '',
         id: target.id,
+        retakeSec: elapsed,
       };
     }
 
@@ -231,20 +279,12 @@
         this.close(dur);
       }
 
-      // Anchor the first section to the recording start (t=0).
-      //
-      // Whisper on CPU can run 10–15s behind real-time speech. By the time it
-      // returns the first Section 1 recognition token, the speaker may already
-      // be deep into Section 2. The timeline then stamps Section 1's startSec
-      // at that late moment (e.g. 14.989s in an 18.5s session), collapsing its
-      // take window to just 1–2 seconds.
-      //
-      // Section 1 ALWAYS starts with the audio recording (t=0). Any unaccounted
-      // audio before the first recognised word belongs to Section 1. Anchoring
-      // here ensures the take slice covers the full spoken duration regardless
-      // of Whisper's recognition latency.
+      // Anchor the first section to the recording start (t=0), unless retaken.
       if (this._sections[0] && this._sections[0].startSec !== null) {
-        this._sections[0].startSec = 0;
+        const s0Retake = (this._sections[0].retakeSec !== null && this._sections[0].retakeSec !== undefined && !isNaN(Number(this._sections[0].retakeSec)))
+          ? Number(this._sections[0].retakeSec)
+          : 0;
+        this._sections[0].startSec = s0Retake;
       }
 
       for (let i = 1; i < this._sections.length; i++) {
@@ -259,17 +299,25 @@
           const wasReached = this._activeId === sec.id;
 
           if (wasReached || hasUnaccountedTime) {
-            sec.startSec = prevEnd;
+            const minStart = (sec.retakeSec !== null && sec.retakeSec !== undefined && !isNaN(Number(sec.retakeSec)))
+              ? Math.max(prevEnd, Number(sec.retakeSec))
+              : prevEnd;
+            sec.startSec = minStart;
             if (sec.endSec === null) {
               // Calculate proportional slice of remaining unaccounted duration
               let unstartedCount = 0;
               for (let k = i; k < this._sections.length; k++) {
                 if (this._sections[k].endSec === null) unstartedCount++;
               }
-              const remainingTime = Math.max(0, dur - prevEnd);
+              const remainingTime = Math.max(0, dur - minStart);
               const slice = unstartedCount > 0 ? (remainingTime / unstartedCount) : remainingTime;
-              sec.endSec = Math.min(dur, prevEnd + slice);
+              sec.endSec = Math.min(dur, minStart + slice);
             }
+          }
+        } else if (sec.retakeSec !== null && sec.retakeSec !== undefined && !isNaN(Number(sec.retakeSec))) {
+          const rVal = Number(sec.retakeSec);
+          if (sec.startSec !== null && !isNaN(Number(sec.startSec)) && sec.startSec < rVal) {
+            sec.startSec = rVal;
           }
         }
       }
@@ -295,6 +343,7 @@
         s.startSec = null;
         s.endSec = null;
         s._lastSeenSec = null;
+        s.retakeSec = null;
       });
       this._activeId = activeId || null;
       if (this._onActiveSectionChange && this._activeId) {
@@ -313,6 +362,10 @@
 
     get activeSection() {
       return this._sections.find((s) => s.id === this._activeId) || null;
+    }
+
+    get elapsedSec() {
+      return Math.max(0, Number(this._getElapsedSec()) || 0);
     }
   }
 

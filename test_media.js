@@ -563,4 +563,49 @@ describe('TeleprompterMedia - MediaSession UI & Device Binding', () => {
   });
 });
 
+describe('TeleprompterMedia - Retake Boundary Reconciliation & EDL Generation', () => {
+  test('reconcileSectionBoundaries clamps section startSec to retakeSec when retaken', () => {
+    const sections = [
+      { id: '1', title: 'Sec 1', startSec: 0, endSec: 10.0 },
+      { id: '2', title: 'Sec 2', startSec: 11.0, endSec: 25.0, retakeSec: 16.0 },
+    ];
+    const reconciled = Media.reconcileSectionBoundaries(sections, 25.0);
+    assert.equal(reconciled[1].startSec, 16.0, 'Section 2 startSec must be clamped to retakeSec (16.0s)');
+  });
+
+  test('reconcileSectionBoundaries unstarted fallback respects retakeSec', () => {
+    const sections = [
+      { id: '1', title: 'Sec 1', startSec: 0, endSec: 10.0 },
+      { id: '2', title: 'Sec 2', startSec: null, endSec: null, retakeSec: 15.0 },
+    ];
+    const reconciled = Media.reconcileSectionBoundaries(sections, 30.0);
+    assert.equal(reconciled[1].startSec, 15.0, 'Fallback startSec must start at retakeSec (15.0s), not prevEnd (10.0s)');
+    assert.ok(reconciled[1].endSec > 15.0, 'Fallback endSec must be after retakeSec');
+  });
+
+  test('secondsToSMPTE converts decimal seconds to SMPTE timecode at 30 fps', () => {
+    assert.equal(Media.secondsToSMPTE(0, 30), '00:00:00:00');
+    assert.equal(Media.secondsToSMPTE(1.5, 30), '00:00:01:15');
+    assert.equal(Media.secondsToSMPTE(65.1, 30), '00:01:05:03');
+    assert.equal(Media.secondsToSMPTE(3661.0, 30), '01:01:01:00');
+  });
+
+  test('generateEdl generates valid CMX 3600 EDL omitting aborted takes', () => {
+    const sections = [
+      { id: '1', title: 'Intro', startSec: 0.0, endSec: 10.0 },
+      { id: '2', title: 'Main Point', startSec: 11.0, endSec: 30.0, retakeSec: 18.0 }
+    ];
+    const edl = Media.generateEdl('recording-2026-10-03.webm', sections, 30);
+
+    assert.ok(edl.includes('TITLE: recording-2026-10-03'));
+    assert.ok(edl.includes('FCM: NON-DROP FRAME'));
+    assert.ok(edl.includes('001  AX       AA/V  C        00:00:00:00 00:00:10:00 00:00:00:00 00:00:10:00'));
+    assert.ok(edl.includes('* SECTION: [Intro]'));
+    // Section 2 clean take starts at 18.0s (00:00:18:00) to 30.0s (00:00:30:00), destination starts at 10.0s (00:00:10:00) to 22.0s (00:00:22:00)
+    assert.ok(edl.includes('002  AX       AA/V  C        00:00:18:00 00:00:30:00 00:00:10:00 00:00:22:00'));
+    assert.ok(edl.includes('* SECTION: [Main Point]'));
+  });
+});
+
+
 

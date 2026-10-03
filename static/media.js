@@ -411,6 +411,15 @@
 
     const reconciled = sections.map((s) => Object.assign({}, s));
     const sec1 = reconciled[0];
+
+    // Enforce retakeSec floor on first section if retaken
+    if (sec1 && sec1.retakeSec !== null && sec1.retakeSec !== undefined && !isNaN(Number(sec1.retakeSec))) {
+      const r1 = Number(sec1.retakeSec);
+      if (sec1.startSec !== null && !isNaN(Number(sec1.startSec)) && sec1.startSec < r1) {
+        sec1.startSec = r1;
+      }
+    }
+
     const sec1End = (sec1.endSec !== null && sec1.endSec !== undefined && !isNaN(Number(sec1.endSec)))
       ? Number(sec1.endSec)
       : (sec1.startSec !== null && sec1.startSec !== undefined && !isNaN(Number(sec1.startSec)) ? Number(sec1.startSec) : null);
@@ -426,6 +435,10 @@
 
         const isUnstarted = sec.startSec === null || sec.startSec === undefined || isNaN(Number(sec.startSec));
         if (isUnstarted && prevEnd !== null && totalDuration > prevEnd) {
+          const minStart = (sec.retakeSec !== null && sec.retakeSec !== undefined && !isNaN(Number(sec.retakeSec)))
+            ? Math.max(prevEnd, Number(sec.retakeSec))
+            : prevEnd;
+
           // Count unstarted sections from i to end
           let unstartedCount = 0;
           for (let k = i; k < reconciled.length; k++) {
@@ -434,17 +447,35 @@
               unstartedCount++;
             }
           }
-          const remainingTime = Math.max(0, totalDuration - prevEnd);
+          const remainingTime = Math.max(0, totalDuration - minStart);
           const sliceDuration = unstartedCount > 0 ? (remainingTime / unstartedCount) : remainingTime;
-          sec.startSec = prevEnd;
+          sec.startSec = minStart;
           if (sec.endSec === null || sec.endSec === undefined || isNaN(Number(sec.endSec))) {
-            sec.endSec = Math.min(totalDuration, prevEnd + sliceDuration);
+            sec.endSec = Math.min(totalDuration, minStart + sliceDuration);
+          }
+        } else if (sec.retakeSec !== null && sec.retakeSec !== undefined && !isNaN(Number(sec.retakeSec))) {
+          const rSec = Number(sec.retakeSec);
+          if (sec.startSec !== null && !isNaN(Number(sec.startSec)) && sec.startSec < rSec) {
+            sec.startSec = rSec;
           }
         }
       }
     }
 
     return reconciled;
+  }
+
+  // Persisted master-tail trim (seconds, 0–1 in 0.1 steps). Shared with export.js via localStorage.
+  function readStoredMasterTrim() {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const saved = localStorage.getItem('teleprompter_master_trim');
+        if (saved !== null && !isNaN(Number(saved))) {
+          return Math.min(1, Math.max(0, Math.round(Number(saved) * 10) / 10));
+        }
+      }
+    } catch (_) {}
+    return 0;
   }
 
   /**
@@ -456,13 +487,15 @@
    * @param {number} [pad=0.25] - Silence padding in seconds around section bounds
    * @returns {{ takes: Array<{ filename: string, title: string, duration: number, blob: Blob|ArrayBuffer, isMaster: boolean }> }}
    */
-  function processAudioTakes(audioBuffer, sections = [], format = 'wav', pad = 0.25, onProgress = null) {
+  function processAudioTakes(audioBuffer, sections = [], format = 'wav', pad = 0.25, onProgress = null, masterTrimSec = 0) {
     if (!audioBuffer || !Array.isArray(sections) || sections.length === 0) {
       return { takes: [] };
     }
 
     const cleanSectionBuffers = [];
     const takes = [];
+    let prevMasterEnd = null;
+    let prevRawEnd = null;
     const totalDuration = audioBuffer.duration || (audioBuffer.length / audioBuffer.sampleRate) || 0;
     const effectiveSections = reconcileSectionBoundaries(sections, totalDuration);
 
@@ -494,7 +527,15 @@
         }
         const sliceBuf = sliceAudioBuffer(audioBuffer, sStart, sEnd);
         if (sliceBuf) {
-          cleanSectionBuffers.push(sliceBuf);
+          // Master only: neighbouring padded cuts overlap, which would play that audio twice.
+          // Start this piece where the previous one ended when the overlap is just padding.
+          let masterPiece = sliceBuf;
+          if (prevMasterEnd !== null && sStart < prevMasterEnd && rawStart >= prevRawEnd - 0.05) {
+            masterPiece = (prevMasterEnd < sEnd) ? sliceAudioBuffer(audioBuffer, prevMasterEnd, sEnd) : null;
+          }
+          if (masterPiece) cleanSectionBuffers.push(masterPiece);
+          prevMasterEnd = sEnd;
+          prevRawEnd = rawEnd;
           let secBlob;
           if (format === 'mp3') {
             secBlob = audioBufferToMp3(sliceBuf, 192);
@@ -522,19 +563,32 @@
           timeRemaining: 'Almost done…'
         });
       }
-      const stitchedBuf = concatAudioBuffers(cleanSectionBuffers);
-      let stitchedBlob;
-      if (format === 'mp3') {
-        stitchedBlob = audioBufferToMp3(stitchedBuf, 192);
-      } else {
-        stitchedBlob = audioBufferToWav(stitchedBuf);
-      }
+      const fullBuf = concatAudioBuffers(cleanSectionBuffers);
+      const fullDur = fullBuf.duration || (fullBuf.length / fullBuf.sampleRate);
+      // Builds the master blob with `sec` seconds chopped off the end (0–1s, master only).
+      const renderMaster = (sec) => {
+        const trim = Math.min(1, Math.max(0, Number(sec) || 0));
+        let buf = fullBuf;
+        if (trim > 0 && fullDur - trim > 0.1) {
+          const trimmedBuf = sliceAudioBuffer(fullBuf, 0, fullDur - trim);
+          if (trimmedBuf) buf = trimmedBuf;
+        }
+        const blob = format === 'mp3' ? audioBufferToMp3(buf, 192) : audioBufferToWav(buf);
+        return { blob, duration: buf.duration || (buf.length / buf.sampleRate) };
+      };
+      const initialTrim = Math.min(1, Math.max(0, Number(masterTrimSec) || 0));
+      const rendered = renderMaster(initialTrim);
       takes.push({
         filename: `everything.${format}`,
         title: 'Spliced Master Take',
-        duration: stitchedBuf.duration || (stitchedBuf.length / stitchedBuf.sampleRate),
-        blob: stitchedBlob,
-        isMaster: true
+        duration: rendered.duration,
+        blob: rendered.blob,
+        isMaster: true,
+        // Trim support: untrimmed WAV for instant preview + re-render callback for Apply.
+        trimSec: initialTrim,
+        fullDuration: fullDur,
+        rawBlob: audioBufferToWav(fullBuf),
+        retrim: renderMaster
       });
     }
 
@@ -764,6 +818,80 @@
     return out;
   }
 
+  /**
+   * Converts a time in seconds into an SMPTE timecode string (HH:MM:SS:FF)
+   * at the specified frame rate (default: 30 fps, non-drop frame).
+   *
+   * @param {number} seconds - Time in seconds
+   * @param {number} [fps=30] - Frame rate
+   * @returns {string} HH:MM:SS:FF
+   */
+  function secondsToSMPTE(seconds, fps = 30) {
+    const totalFrames = Math.max(0, Math.round(Number(seconds || 0) * fps));
+    const ff = totalFrames % fps;
+    const totalSecs = Math.floor(totalFrames / fps);
+    const ss = totalSecs % 60;
+    const mm = Math.floor(totalSecs / 60) % 60;
+    const hh = Math.floor(totalSecs / 3600);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(hh)}:${pad(mm)}:${pad(ss)}:${pad(ff)}`;
+  }
+
+  /**
+   * Generates a standard CMX 3600 Edit Decision List (EDL) string
+   * for a clean assembly cut of the approved section takes.
+   * Skips any aborted takes.
+   *
+   * @param {string} sourceClipName - Filename of the source video (e.g. recording-...webm)
+   * @param {Array<object>} sections - Section markers with startSec, endSec, title, retakeSec
+   * @param {number} [fps=30] - Target frame rate
+   * @returns {string} CMX 3600 EDL formatted text
+   */
+  function generateEdl(sourceClipName, sections = [], fps = 30) {
+    const cleanBase = (sourceClipName || 'recording').replace(/\.[^.]+$/, '');
+    const lines = [
+      `TITLE: ${cleanBase}`,
+      'FCM: NON-DROP FRAME',
+      ''
+    ];
+
+    let eventNum = 1;
+    let dstTimelineSec = 0;
+
+    for (const sec of sections) {
+      if (!sec || sec.startSec === null || sec.startSec === undefined || isNaN(Number(sec.startSec)) ||
+          sec.endSec === null || sec.endSec === undefined || isNaN(Number(sec.endSec))) {
+        continue;
+      }
+      let rawStart = Number(sec.startSec);
+      let rawEnd = Number(sec.endSec);
+      if (sec.retakeSec !== null && sec.retakeSec !== undefined && !isNaN(Number(sec.retakeSec))) {
+        rawStart = Math.max(rawStart, Number(sec.retakeSec));
+      }
+      if (rawEnd <= rawStart) {
+        continue;
+      }
+
+      const takeDuration = rawEnd - rawStart;
+      const srcIn = secondsToSMPTE(rawStart, fps);
+      const srcOut = secondsToSMPTE(rawEnd, fps);
+      const dstIn = secondsToSMPTE(dstTimelineSec, fps);
+      dstTimelineSec += takeDuration;
+      const dstOut = secondsToSMPTE(dstTimelineSec, fps);
+
+      const evtStr = String(eventNum).padStart(3, '0');
+      lines.push(`${evtStr}  AX       AA/V  C        ${srcIn} ${srcOut} ${dstIn} ${dstOut}`);
+      lines.push(`* FROM CLIP NAME: ${sourceClipName}`);
+      if (sec.title) {
+        lines.push(`* SECTION: [${sec.title}]`);
+      }
+      lines.push('');
+      eventNum++;
+    }
+
+    return lines.join('\r\n');
+  }
+
 
   // =========================================================================
   // RecordingFinalizer (C2) — finalizeRecording(chunks, opts) → TakeSet
@@ -786,6 +914,7 @@
       sessionDurationSec = 0,
       onProgress = null,
       refineBoundaries = null,
+      masterTrimSec = 0,
     } = opts;
 
     const recordedBlob = new Blob(chunks, { type: mimeType });
@@ -857,7 +986,7 @@
               console.warn('Boundary refinement failed, using live boundaries:', refineErr);
             }
           }
-          const result = processAudioTakes(audioBuffer, sections, audioFormat, 0.25, onProgress);
+          const result = processAudioTakes(audioBuffer, sections, audioFormat, 0.25, onProgress, masterTrimSec);
           takes = (result && result.takes && result.takes.length > 0) ? result.takes : null;
         }
 
@@ -889,22 +1018,49 @@
     const effectiveMode = isAudioOnly ? 'audio' : 'video';
     const filename = getRecordingFilename(effectiveMode, finalExtension);
     const sectionMarkers = sections.length > 0
-      ? sections.map((s) => ({ id: s.id, title: s.title, startSec: s.startSec, endSec: s.endSec }))
+      ? sections.map((s) => ({ id: s.id, title: s.title, startSec: s.startSec, endSec: s.endSec, retakeSec: s.retakeSec }))
       : [];
+
+    const takes = [{
+      filename,
+      title: effectiveMode === 'video' ? 'Master Session Video' : 'Master Session Audio',
+      duration: sessionDurationSec,
+      blob: finalBlob,
+      isMaster: true,
+      sectionMarkers,
+    }];
+
+    if (effectiveMode === 'video' && sections.length > 0) {
+      const edlContent = generateEdl(filename, sections, 30);
+      const edlBlob = new Blob([edlContent], { type: 'text/plain;charset=utf-8' });
+      const edlFilename = filename.replace(/\.[^.]+$/, '.edl');
+
+      let cleanDur = 0;
+      for (const s of sections) {
+        if (s && s.startSec !== null && s.endSec !== null && !isNaN(Number(s.startSec)) && !isNaN(Number(s.endSec))) {
+          const st = (s.retakeSec !== null && !isNaN(Number(s.retakeSec)))
+            ? Math.max(Number(s.startSec), Number(s.retakeSec))
+            : Number(s.startSec);
+          if (Number(s.endSec) > st) cleanDur += (Number(s.endSec) - st);
+        }
+      }
+
+      takes.push({
+        filename: edlFilename,
+        title: 'DaVinci Resolve EDL (Clean Assembly)',
+        duration: cleanDur > 0 ? cleanDur : sessionDurationSec,
+        blob: edlBlob,
+        isMaster: false,
+        isEdl: true,
+      });
+    }
 
     return {
       blob: finalBlob,
       extension: finalExtension,
       filename,
       sectionMarkers,
-      takes: [{
-        filename,
-        title: effectiveMode === 'video' ? 'Master Session Video' : 'Master Session Audio',
-        duration: sessionDurationSec,
-        blob: finalBlob,
-        isMaster: true,
-        sectionMarkers,
-      }],
+      takes,
     };
   }
 
@@ -1469,6 +1625,7 @@
               sessionDurationSec,
               onProgress,
               refineBoundaries,
+              masterTrimSec: readStoredMasterTrim(),
             });
             resolve(result);
           } catch (err) {
@@ -1563,6 +1720,8 @@
     audioBufferToPcm16k,
     computeCrc32,
     createZipBlob,
+    secondsToSMPTE,
+    generateEdl,
     getAudioRecorderOptions,
     getVideoRecorderOptions,
     matchDevice,

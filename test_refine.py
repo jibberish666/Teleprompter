@@ -43,6 +43,37 @@ class RefineTests(unittest.TestCase):
         res = refine.align_sections(self.sections, [])
         self.assertEqual(res, {"s1": None, "s2": None})
 
+    def test_retake_discards_aborted_take_and_snaps_to_clean_take(self):
+        # Section 1 spoken cleanly
+        w1, t = fake_speech(S1, 0.0)
+        s1_end = w1[-1]["end"]
+
+        # Section 2 aborted take 1 (only first 6 words spoken)
+        s2_partial = " ".join(S2.split()[:6])
+        w2_aborted, t_abort = fake_speech(s2_partial, t + 0.5)
+
+        # Retake key pressed at retake_time
+        retake_time = t_abort + 0.5
+
+        # Section 2 clean take 2 spoken after retake
+        w2_clean, _ = fake_speech(S2, retake_time + 0.8)
+
+        sections_with_retake = [
+            {"id": "s1", "text": S1},
+            {"id": "s2", "text": S2, "retakeSec": retake_time},
+        ]
+        all_spoken = w1 + w2_aborted + w2_clean
+        res = refine.align_sections(sections_with_retake, all_spoken)
+
+        self.assertIsNotNone(res["s1"])
+        self.assertIsNotNone(res["s2"])
+        # Section 1 ends before retake
+        self.assertLess(res["s1"]["endSec"], retake_time)
+        # Section 2 starts at clean take, strictly discarding aborted take 1
+        self.assertGreaterEqual(res["s2"]["startSec"], retake_time)
+        self.assertAlmostEqual(res["s2"]["startSec"], w2_clean[0]["start"], places=2)
+        self.assertAlmostEqual(res["s2"]["endSec"], w2_clean[-1]["end"], places=2)
+
 
 if __name__ == "__main__":
     unittest.main()

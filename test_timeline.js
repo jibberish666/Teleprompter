@@ -115,10 +115,12 @@ describe('TeleprompterTimeline - Section Boundary & Retake State Machine', () =>
       seekIndex: 50,
       title: 'Main Story',
       id: 'sec-2',
+      retakeSec: 15.0,
     });
-    // Timestamps reset
+    // Timestamps reset but retakeSec preserved
     assert.equal(sampleSections[1].startSec, null);
     assert.equal(sampleSections[1].endSec, null);
+    assert.equal(sampleSections[1].retakeSec, 15.0);
   });
 
   test('retake falls back to first section if none active', () => {
@@ -127,7 +129,59 @@ describe('TeleprompterTimeline - Section Boundary & Retake State Machine', () =>
       seekIndex: 0,
       title: 'Intro',
       id: 'sec-1',
+      retakeSec: 0,
     });
+  });
+
+  test('retake timestamps prevent boundary resolution from pulling back into aborted take', () => {
+    // Section 1 completes at t=8.0s
+    sampleSections[0].startSec = 0.0;
+    sampleSections[0].endSec = 8.0;
+
+    // Retake triggered on Section 2 at t=14.0s
+    timeline.activeId = 'sec-2';
+    elapsedSec = 14.0;
+    timeline.retake();
+
+    // Resolving boundaries for 20s recording must anchor Section 2 start at retakeSec (14.0s), not prevEnd (8.0s)
+    const markers = timeline.getSectionMarkers(20.0);
+    assert.equal(markers[1].startSec, 14.0);
+    assert.ok(markers[1].endSec > 14.0);
+  });
+
+  test('retake with explicit section ID transitions activeId and seals previous section', () => {
+    // Session in Section 1
+    timeline.activeId = 'sec-1';
+    sampleSections[0].startSec = 1.0;
+    sampleSections[0]._lastSeenSec = 6.5;
+    sampleSections[0].endSec = null;
+
+    // Retake invoked targeting Section 2 directly
+    const result = timeline.retake(10.0, 'sec-2');
+
+    assert.equal(result.id, 'sec-2');
+    assert.equal(result.seekIndex, 50);
+    assert.equal(timeline.activeId, 'sec-2');
+    assert.equal(sampleSections[0].endSec, 6.5); // Sealed previous section
+    assert.equal(sampleSections[1].retakeSec, 10.0);
+    assert.equal(changedSection.title, 'Main Story');
+  });
+
+  test('retake with word index resolves to the correct enclosing section', () => {
+    sampleSections[0].endIndex = 49;
+    sampleSections[1].endIndex = 119;
+    sampleSections[2].endIndex = 150;
+
+    timeline.activeId = 'sec-1';
+    sampleSections[0].startSec = 1.0;
+
+    // Prompter is at word index 65 (inside Section 2: 50..119)
+    const result = timeline.retake(12.0, 65);
+
+    assert.equal(result.id, 'sec-2');
+    assert.equal(result.seekIndex, 50);
+    assert.equal(timeline.activeId, 'sec-2');
+    assert.equal(sampleSections[1].retakeSec, 12.0);
   });
 
   test('close sets endSec for active section and clears activeId', () => {
@@ -293,4 +347,29 @@ describe('TeleprompterTimeline - Section Boundary & Retake State Machine', () =>
     assert.ok(sampleSections[0].endSec - sampleSections[0].startSec >= 8.0,
       `Section 1 must span its full spoken duration (~8.6s), not collapse to near-zero. Got: ${sampleSections[0].endSec - sampleSections[0].startSec}s`);
   });
+
+  test('resolveBoundaries respects retakeSec on Section 1 and does not anchor to 0 if retaken', () => {
+    sampleSections[0].retakeSec = 8.5;
+    sampleSections[0].startSec = 8.7;
+    sampleSections[0].endSec = 15.0;
+
+    const resolved = timeline.resolveBoundaries(15.0);
+
+    assert.equal(resolved[0].startSec, 8.5, 'Section 1 must be anchored to its retakeSec, not 0');
+    assert.equal(resolved[0].endSec, 15.0);
+  });
+
+  test('resolveBoundaries clamps active section startSec to retakeSec if speech recognition stamped earlier', () => {
+    sampleSections[0].startSec = 0;
+    sampleSections[0].endSec = 10.0;
+    sampleSections[1].retakeSec = 14.0;
+    sampleSections[1].startSec = 11.5; // Stamped during aborted take
+    sampleSections[1].endSec = 22.0;
+
+    const resolved = timeline.resolveBoundaries(22.0);
+
+    assert.equal(resolved[1].startSec, 14.0, 'Section 2 startSec must be clamped to retakeSec (14.0s)');
+    assert.equal(resolved[1].endSec, 22.0);
+  });
 });
+

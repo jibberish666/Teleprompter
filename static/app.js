@@ -502,6 +502,9 @@
         const sectionTexts = sections.map((s) => ({
           id: s.id,
           text: allWords.filter((w) => w.sectionId === s.id).map((w) => w.original).join(' '),
+          retakeSec: (s.retakeSec !== null && s.retakeSec !== undefined && !isNaN(Number(s.retakeSec)))
+            ? Number(s.retakeSec)
+            : null,
         }));
         ws.send(JSON.stringify({ type: 'refine_end', id: reqId, sections: sectionTexts }));
       } catch (err) {
@@ -1156,11 +1159,30 @@
 
   function triggerSectionRetake() {
     if (!isPrompting || parsedSections.length === 0) return;
-    const result = sectionTimeline.retake();
+    const nowSec = (mediaSession && typeof mediaSession.elapsedSec === 'number')
+      ? mediaSession.elapsedSec
+      : (sectionTimeline ? sectionTimeline.elapsedSec : 0);
+
+    // Resolve target section from the current word the prompter is positioned on
+    const currentWord = (allWords && currentWordIndex >= 0 && currentWordIndex < allWords.length)
+      ? allWords[currentWordIndex]
+      : null;
+    const targetRef = currentWord ? (currentWord.sectionId || currentWordIndex) : currentWordIndex;
+
+    const result = sectionTimeline.retake(nowSec, targetRef);
     if (!result) return;
 
     currentWordIndex = result.seekIndex;
+    currentActiveSectionId = result.id;
+
+    // Positional-only rewind to the start of the retaken section.
+    // Temporarily gate isPrompting so updateHighlighting skips premature timestamp mutation
+    // until the speaker actually starts speaking.
+    const _wasPrompting = isPrompting;
+    isPrompting = false;
     updateHighlighting(currentWordIndex, true);
+    isPrompting = _wasPrompting;
+
     send({ type: 'seek', word_index: currentWordIndex });
 
     setBadge(vadStatus, 'RE-TAKE READY', 'bg-amber-950 text-amber-300 border-amber-500/40');
