@@ -46,9 +46,10 @@
       audio_format: 'wav'     // 'wav' | 'mp3' — WAV default avoids MP3 encoding latency during multi-section splitting
     },
     ui: {
-      box_width_pct: 68,
+      box_width_pct: 55,
       font_size: 36,
       font_weight: 500,
+      line_spacing: 'comfortable', // 'tight' (1.20) | 'comfortable' (1.35) | 'relaxed' (1.50)
       box_opacity: 0.9,
       visible_lines: 7,
       mic_sensitivity: 15,
@@ -109,7 +110,8 @@
   ];
 
   const VALID_FONTS = new Set(AVAILABLE_FONTS.map(f => f.id));
-  const VALID_FONT_WEIGHTS = new Set([400, 500, 600, 700]);
+  const VALID_FONT_WEIGHTS = new Set([400, 500, 700]);
+  const VALID_LINE_SPACINGS = new Set(['tight', 'comfortable', 'relaxed']);
   const VALID_PROFILES = new Set(['fast', 'balanced', 'accurate']);
   const VALID_RECORD_MODES = new Set(['video', 'audio']);
   const VALID_VIDEO_FORMATS = new Set(['mp4', 'webm']);
@@ -201,7 +203,9 @@
       }
       const fw = parseInt(raw.ui.font_weight, 10);
       if (!isNaN(fw)) {
-        if (VALID_FONT_WEIGHTS.has(fw)) {
+        if (fw === 600) {
+          result.ui.font_weight = 500; // Graceful migration from removed Semi-Bold (600) to Medium (500)
+        } else if (VALID_FONT_WEIGHTS.has(fw)) {
           result.ui.font_weight = fw;
         } else {
           let closest = 500;
@@ -214,6 +218,14 @@
             }
           }
           result.ui.font_weight = closest;
+        }
+      }
+      if (typeof raw.ui.line_spacing === 'string') {
+        const ls = raw.ui.line_spacing.trim().toLowerCase();
+        if (VALID_LINE_SPACINGS.has(ls)) {
+          result.ui.line_spacing = ls;
+        } else {
+          result.ui.line_spacing = 'comfortable';
         }
       }
       const bo = parseFloat(raw.ui.box_opacity);
@@ -570,6 +582,7 @@
     AVAILABLE_FONTS,
     VALID_FONTS,
     VALID_FONT_WEIGHTS,
+    VALID_LINE_SPACINGS,
     getDefaultConfig,
     validateAndSanitize,
     migrateLegacyStorage,

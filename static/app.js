@@ -288,6 +288,7 @@
   const btnOpenTypeface = document.getElementById('btn-open-typeface');
   const displayFontName = document.getElementById('display-font-name');
   const valFontWeight = document.getElementById('val-fontweight');
+  const valLineSpacing = document.getElementById('val-linespacing');
   const modalTypeface = document.getElementById('modal-typeface');
   const btnCloseTypeface = document.getElementById('btn-close-typeface');
   const btnDoneTypeface = document.getElementById('btn-done-typeface');
@@ -316,8 +317,13 @@
   const FONT_WEIGHT_LABELS = {
     400: 'Regular',
     500: 'Medium',
-    600: 'Semi-Bold',
     700: 'Bold'
+  };
+
+  const LINE_SPACING_LABELS = {
+    tight: 'Tight',
+    comfortable: 'Comfortable',
+    relaxed: 'Relaxed'
   };
 
   const ENGINE_DESCRIPTIONS = {
@@ -900,7 +906,9 @@
 
   // ---- PrompterViewport Display Engine (static/viewport.js) ----------------
   const initialFontFamily = configStore ? (configStore.get('ui.font_family') || 'open-sans') : 'open-sans';
-  const initialFontWeight = configStore ? (configStore.get('ui.font_weight') || 500) : 500;
+  const rawInitialFontWeight = configStore ? (configStore.get('ui.font_weight') || 500) : 500;
+  const initialFontWeight = rawInitialFontWeight === 600 ? 500 : rawInitialFontWeight;
+  const initialLineSpacing = configStore ? (configStore.get('ui.line_spacing') || 'comfortable') : 'comfortable';
   const viewport = new TeleprompterViewport.PrompterViewport({
     linesContainer: linesContainer,
     scrollingContent: scrollingContent,
@@ -909,6 +917,7 @@
     initialFontSize: optFontsize ? parseInt(optFontsize.value, 10) || 36 : 36,
     initialFontFamily: initialFontFamily,
     initialFontWeight: initialFontWeight,
+    initialLineSpacing: initialLineSpacing,
     activeLineOffset: 1,
   });
 
@@ -1029,7 +1038,8 @@
 
   // ---- Font Weight Segmented Buttons Controller ----------------------------
   function updateFontWeightUI(weight) {
-    const w = Number(weight) || 500;
+    let w = Number(weight) || 500;
+    if (w === 600) w = 500;
     if (valFontWeight) {
       valFontWeight.textContent = FONT_WEIGHT_LABELS[w] || `${w}`;
     }
@@ -1052,6 +1062,36 @@
       updateFontWeightUI(w);
       if (configStore) {
         configStore.set('ui.font_weight', w);
+      }
+    });
+  });
+
+  // ---- Line Spacing Segmented Buttons Controller ----------------------------
+  function updateLineSpacingUI(spacing) {
+    const s = spacing || 'comfortable';
+    if (valLineSpacing) {
+      valLineSpacing.textContent = LINE_SPACING_LABELS[s] || s;
+    }
+    const buttons = document.querySelectorAll('.btn-linespacing');
+    buttons.forEach(btn => {
+      const btnS = btn.getAttribute('data-spacing');
+      const isActive = btnS === s;
+      if (isActive) {
+        btn.className = 'btn-linespacing py-1 px-1 rounded text-[11px] font-semibold transition bg-indigo-600 text-white shadow-sm cursor-pointer text-center';
+      } else {
+        btn.className = 'btn-linespacing py-1 px-1 rounded text-[11px] font-normal transition text-gray-400 hover:text-white hover:bg-gray-800/80 cursor-pointer text-center';
+      }
+    });
+  }
+
+  document.querySelectorAll('.btn-linespacing').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const spacing = btn.getAttribute('data-spacing');
+      const lines = parseInt(optLines.value, 10) || 7;
+      currentLineHeight = viewport.setLineSpacing(spacing, lines);
+      updateLineSpacingUI(spacing);
+      if (configStore) {
+        configStore.set('ui.line_spacing', spacing);
       }
     });
   });
@@ -1824,7 +1864,7 @@
     currentLineHeight = viewport.setFontSize(fontSize, lines);
 
     // 2. Box Width
-    const boxWidth = configStore.get('ui.box_width_pct') || 68;
+    const boxWidth = configStore.get('ui.box_width_pct') || 55;
     if (optBoxWidth) optBoxWidth.value = boxWidth;
     if (valBoxWidth) valBoxWidth.textContent = `${boxWidth}%`;
     prompterBox.style.width = `${boxWidth}%`;
@@ -1860,9 +1900,18 @@
     }
 
     // 8. Font Weight
-    const fontWeight = configStore.get('ui.font_weight') || 500;
+    let fontWeight = configStore.get('ui.font_weight') || 500;
+    if (fontWeight === 600) {
+      fontWeight = 500;
+      configStore.set('ui.font_weight', 500);
+    }
     viewport.setFontWeight(fontWeight);
     updateFontWeightUI(fontWeight);
+
+    // 9. Line Spacing
+    const lineSpacing = configStore.get('ui.line_spacing') || 'comfortable';
+    currentLineHeight = viewport.setLineSpacing(lineSpacing, lines);
+    updateLineSpacingUI(lineSpacing);
   }
 
   if (configStore) {

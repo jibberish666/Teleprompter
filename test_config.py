@@ -17,7 +17,8 @@ class TestConfigValidation(unittest.TestCase):
         self.assertIn("recording", cfg)
         self.assertIn("ui", cfg)
         self.assertIn("script", cfg)
-        self.assertEqual(cfg["ui"]["box_width_pct"], 68)
+        self.assertEqual(cfg["ui"]["box_width_pct"], 55)
+        self.assertEqual(cfg["ui"]["line_spacing"], "comfortable")
 
     def test_sanitize_clamps_bounds(self):
         # Box width clamped between 30 and 100
@@ -61,11 +62,21 @@ class TestConfigValidation(unittest.TestCase):
         cfg_legacy_font = config.validate_and_sanitize({"ui": {"font_family": "montserrat"}})
         self.assertEqual(cfg_legacy_font["ui"]["font_family"], "open-sans")
 
-        # Font weight validation & snapping
+        # Font weight validation, snapping, and 600 -> 500 migration
         cfg_weight = config.validate_and_sanitize({"ui": {"font_weight": 700}})
         self.assertEqual(cfg_weight["ui"]["font_weight"], 700)
-        cfg_snap_weight = config.validate_and_sanitize({"ui": {"font_weight": 550}})
-        self.assertIn(cfg_snap_weight["ui"]["font_weight"], [500, 600])
+        cfg_snap_weight = config.validate_and_sanitize({"ui": {"font_weight": 420}})
+        self.assertEqual(cfg_snap_weight["ui"]["font_weight"], 400)
+        cfg_migrated = config.validate_and_sanitize({"ui": {"font_weight": 600}})
+        self.assertEqual(cfg_migrated["ui"]["font_weight"], 500)
+
+        # Line spacing validation
+        cfg_ls_tight = config.validate_and_sanitize({"ui": {"line_spacing": "tight"}})
+        self.assertEqual(cfg_ls_tight["ui"]["line_spacing"], "tight")
+        cfg_ls_relaxed = config.validate_and_sanitize({"ui": {"line_spacing": "relaxed"}})
+        self.assertEqual(cfg_ls_relaxed["ui"]["line_spacing"], "relaxed")
+        cfg_ls_bad = config.validate_and_sanitize({"ui": {"line_spacing": "huge"}})
+        self.assertEqual(cfg_ls_bad["ui"]["line_spacing"], "comfortable")
 
     def test_sanitize_profile_validation(self):
         raw = {"engine": {"profile": "invalid_mode"}}

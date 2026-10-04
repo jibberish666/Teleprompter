@@ -20,6 +20,7 @@
   text-align-last: left !important;
   word-spacing: normal !important;
   letter-spacing: normal !important;
+  font-kerning: normal !important;
 }
 
 /* Active Line Highlight Bar: adapts to prompter box width, rounded with consistent padding */
@@ -42,6 +43,7 @@
   text-align-last: left !important;
   word-spacing: normal !important;
   letter-spacing: normal !important;
+  font-kerning: normal !important;
 }
 
 /* Base line styling: left-anchored, consistent 20px padding, no justification */
@@ -53,6 +55,7 @@
   text-align-last: left !important;
   word-spacing: normal !important;
   letter-spacing: normal !important;
+  font-kerning: normal !important;
   display: flex !important;
   align-items: center;
   justify-content: flex-start !important;
@@ -103,6 +106,7 @@
   text-align: left !important;
   word-spacing: normal !important;
   letter-spacing: normal !important;
+  font-kerning: normal !important;
   transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
 }
 

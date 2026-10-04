@@ -39,9 +39,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "audio_format": "mp3",      # "mp3" or "wav"
     },
     "ui": {
-        "box_width_pct": 68,
+        "box_width_pct": 55,
         "font_size": 36,
         "font_weight": 500,
+        "line_spacing": "comfortable",
         "box_opacity": 0.9,
         "visible_lines": 7,
         "mic_sensitivity": 15,
@@ -68,7 +69,8 @@ VALID_VIDEO_FORMATS = {"mp4", "webm"}
 VALID_AUDIO_FORMATS = {"mp3", "wav"}
 VALID_DIFFICULT_STYLES = {"pill", "glow", "underline"}
 VALID_FONTS = {"atkinson", "inter", "lexend", "noto-sans", "open-sans", "source-sans-3"}
-VALID_FONT_WEIGHTS = {400, 500, 600, 700}
+VALID_FONT_WEIGHTS = {400, 500, 700}
+VALID_LINE_SPACINGS = {"tight", "comfortable", "relaxed"}
 
 
 def get_default_config() -> Dict[str, Any]:
@@ -174,12 +176,17 @@ def validate_and_sanitize(raw: Any) -> Dict[str, Any]:
         if fw is not None:
             try:
                 fw_int = int(fw)
-                if fw_int in VALID_FONT_WEIGHTS:
+                if fw_int == 600:
+                    result["ui"]["font_weight"] = 500
+                elif fw_int in VALID_FONT_WEIGHTS:
                     result["ui"]["font_weight"] = fw_int
                 else:
                     result["ui"]["font_weight"] = min(VALID_FONT_WEIGHTS, key=lambda w: abs(w - fw_int))
             except (ValueError, TypeError):
                 pass
+        ls = ui.get("line_spacing")
+        if isinstance(ls, str) and ls.strip().lower() in VALID_LINE_SPACINGS:
+            result["ui"]["line_spacing"] = ls.strip().lower()
         bo = ui.get("box_opacity")
         if bo is not None:
             try:

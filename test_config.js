@@ -22,7 +22,8 @@ describe('TeleprompterConfig - Schema Validation & Defaults', () => {
   test('returns default configuration with proper domains', () => {
     const def = Config.getDefaultConfig();
     assert.equal(def.version, 1);
-    assert.equal(def.ui.box_width_pct, 68);
+    assert.equal(def.ui.box_width_pct, 55);
+    assert.equal(def.ui.line_spacing, 'comfortable');
     assert.equal(def.ui.auto_format_on_paste, true);
     assert.equal(def.engine.profile, 'fast');
     assert.equal(def.recording.mode, 'video');
@@ -87,20 +88,39 @@ describe('TeleprompterConfig - Schema Validation & Defaults', () => {
     assert.equal(legacy.ui.font_family, 'open-sans');
   });
 
-  test('validates and snaps font weight against VALID_FONT_WEIGHTS', () => {
+  test('validates and snaps font weight against VALID_FONT_WEIGHTS and migrates 600 to 500', () => {
     assert.ok(Config.VALID_FONT_WEIGHTS.has(400));
     assert.ok(Config.VALID_FONT_WEIGHTS.has(500));
-    assert.ok(Config.VALID_FONT_WEIGHTS.has(600));
+    assert.ok(!Config.VALID_FONT_WEIGHTS.has(600));
     assert.ok(Config.VALID_FONT_WEIGHTS.has(700));
 
-    const valid = Config.validateAndSanitize({ ui: { font_weight: 600 } });
-    assert.equal(valid.ui.font_weight, 600);
+    // Semi-Bold (600) gracefully migrates to Medium (500)
+    const migrated = Config.validateAndSanitize({ ui: { font_weight: 600 } });
+    assert.equal(migrated.ui.font_weight, 500);
+
+    const valid = Config.validateAndSanitize({ ui: { font_weight: 700 } });
+    assert.equal(valid.ui.font_weight, 700);
 
     const snapped = Config.validateAndSanitize({ ui: { font_weight: 420 } });
     assert.equal(snapped.ui.font_weight, 400);
 
     const snappedHigh = Config.validateAndSanitize({ ui: { font_weight: 900 } });
     assert.equal(snappedHigh.ui.font_weight, 700);
+  });
+
+  test('validates and sanitizes line_spacing presets', () => {
+    assert.ok(Config.VALID_LINE_SPACINGS.has('tight'));
+    assert.ok(Config.VALID_LINE_SPACINGS.has('comfortable'));
+    assert.ok(Config.VALID_LINE_SPACINGS.has('relaxed'));
+
+    const tight = Config.validateAndSanitize({ ui: { line_spacing: 'tight' } });
+    assert.equal(tight.ui.line_spacing, 'tight');
+
+    const relaxed = Config.validateAndSanitize({ ui: { line_spacing: 'relaxed' } });
+    assert.equal(relaxed.ui.line_spacing, 'relaxed');
+
+    const invalid = Config.validateAndSanitize({ ui: { line_spacing: 'enormous' } });
+    assert.equal(invalid.ui.line_spacing, 'comfortable');
   });
 
   test('enforces enum constraints on profiles and recording options', () => {
@@ -225,7 +245,7 @@ describe('TeleprompterConfig - Store State, Patches, & Subscriptions', () => {
     assert.equal(store.get('audio.device_name'), 'Podcaster USB');
     assert.equal(store.get('engine.profile'), 'balanced');
     // UI defaults preserved
-    assert.equal(store.get('ui.box_width_pct'), 68);
+    assert.equal(store.get('ui.box_width_pct'), 55);
   });
 
   test('does not clobber non-empty client script with empty server script', () => {

@@ -20,13 +20,26 @@
 })(typeof self !== 'undefined' ? self : (typeof globalThis !== 'undefined' ? globalThis : this), function (root) {
   'use strict';
 
+  const LINE_SPACING_RATIOS = {
+    tight: 1.20,
+    comfortable: 1.35,
+    relaxed: 1.50
+  };
+
   /**
-   * Calculates responsive line height based on typography font size (~1.4 ratio).
+   * Calculates responsive line height based on typography font size and line spacing ratio.
+   * Tight: 1.20, Comfortable: 1.35, Relaxed: 1.50.
    * Ensures a minimum line height of 28px.
    */
-  function getLineHeightForFontSize(fontSize) {
+  function getLineHeightForFontSize(fontSize, lineSpacing = 'comfortable') {
     const size = (fontSize !== undefined && fontSize !== null && !isNaN(Number(fontSize))) ? Number(fontSize) : 36;
-    return Math.max(28, Math.round(size * 1.4));
+    let ratio = 1.35;
+    if (typeof lineSpacing === 'number' && !isNaN(lineSpacing) && lineSpacing > 0) {
+      ratio = lineSpacing;
+    } else if (typeof lineSpacing === 'string' && LINE_SPACING_RATIOS[lineSpacing.toLowerCase()]) {
+      ratio = LINE_SPACING_RATIOS[lineSpacing.toLowerCase()];
+    }
+    return Math.max(28, Math.round(size * ratio));
   }
 
   /**
@@ -93,7 +106,8 @@
 
       this.activeLineOffset = options.activeLineOffset !== undefined ? options.activeLineOffset : 1;
       this.fontSize = options.initialFontSize || 36;
-      this.lineHeight = getLineHeightForFontSize(this.fontSize);
+      this.lineSpacing = options.initialLineSpacing || 'comfortable';
+      this.lineHeight = getLineHeightForFontSize(this.fontSize, this.lineSpacing);
       this.currentLineIndex = 0;
       this.currentWordIndex = 0;
       this.fontFamily = options.initialFontFamily || 'open-sans';
@@ -135,11 +149,23 @@
     }
 
     /**
+     * Updates line spacing preset ('tight' | 'comfortable' | 'relaxed'), recalculates geometry,
+     * updates prompter CSS custom property, and repositions scroll offset.
+     */
+    setLineSpacing(lineSpacing, numLines = 3) {
+      this.lineSpacing = lineSpacing || 'comfortable';
+      this.lineHeight = getLineHeightForFontSize(this.fontSize, this.lineSpacing);
+      this.updateViewportLines(numLines);
+      this.scrollToLine(this.currentLineIndex);
+      return this.lineHeight;
+    }
+
+    /**
      * Updates font size, recalculates geometry, and repositions scroll offset.
      */
     setFontSize(fontSize, numLines = 3) {
       this.fontSize = Number(fontSize) || 36;
-      this.lineHeight = getLineHeightForFontSize(this.fontSize);
+      this.lineHeight = getLineHeightForFontSize(this.fontSize, this.lineSpacing);
 
       if (this.linesContainer) {
         this.linesContainer.style.fontSize = `${this.fontSize}px`;
@@ -252,6 +278,7 @@
   }
 
   return {
+    LINE_SPACING_RATIOS,
     getLineHeightForFontSize,
     getScrollTranslateY,
     renderLinesHTML,
