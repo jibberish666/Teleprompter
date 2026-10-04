@@ -38,6 +38,69 @@ describe('TeleprompterConfig - Schema Validation & Defaults', () => {
       ui: { box_width_pct: 180 } // maximum is 100
     });
     assert.equal(clampedMax.ui.box_width_pct, 100);
+
+    const clampedFont = Config.validateAndSanitize({
+      ui: { font_size: 10 }
+    });
+    assert.equal(clampedFont.ui.font_size, 16);
+
+    const clampedOpacity = Config.validateAndSanitize({
+      ui: { box_opacity: 0.05 }
+    });
+    assert.equal(clampedOpacity.ui.box_opacity, 0.2);
+
+    const clampedLines = Config.validateAndSanitize({
+      ui: { visible_lines: 50 }
+    });
+    assert.equal(clampedLines.ui.visible_lines, 12);
+
+    const clampedSens = Config.validateAndSanitize({
+      ui: { mic_sensitivity: 0 }
+    });
+    assert.equal(clampedSens.ui.mic_sensitivity, 5);
+  });
+
+  test('validates font family selection against AVAILABLE_FONTS', () => {
+    assert.equal(Config.AVAILABLE_FONTS.length, 6);
+    assert.ok(Config.VALID_FONTS.has('open-sans'));
+    assert.ok(Config.VALID_FONTS.has('inter'));
+    assert.ok(Config.VALID_FONTS.has('source-sans-3'));
+    assert.ok(Config.VALID_FONTS.has('atkinson'));
+    assert.ok(Config.VALID_FONTS.has('lexend'));
+    assert.ok(Config.VALID_FONTS.has('noto-sans'));
+    assert.ok(!Config.VALID_FONTS.has('montserrat'));
+    assert.ok(!Config.VALID_FONTS.has('roboto-mono'));
+
+    const valid = Config.validateAndSanitize({
+      ui: { font_family: 'lexend' }
+    });
+    assert.equal(valid.ui.font_family, 'lexend');
+
+    const invalid = Config.validateAndSanitize({
+      ui: { font_family: 'wingdings' }
+    });
+    assert.equal(invalid.ui.font_family, 'open-sans');
+
+    const legacy = Config.validateAndSanitize({
+      ui: { font_family: 'montserrat' }
+    });
+    assert.equal(legacy.ui.font_family, 'open-sans');
+  });
+
+  test('validates and snaps font weight against VALID_FONT_WEIGHTS', () => {
+    assert.ok(Config.VALID_FONT_WEIGHTS.has(400));
+    assert.ok(Config.VALID_FONT_WEIGHTS.has(500));
+    assert.ok(Config.VALID_FONT_WEIGHTS.has(600));
+    assert.ok(Config.VALID_FONT_WEIGHTS.has(700));
+
+    const valid = Config.validateAndSanitize({ ui: { font_weight: 600 } });
+    assert.equal(valid.ui.font_weight, 600);
+
+    const snapped = Config.validateAndSanitize({ ui: { font_weight: 420 } });
+    assert.equal(snapped.ui.font_weight, 400);
+
+    const snappedHigh = Config.validateAndSanitize({ ui: { font_weight: 900 } });
+    assert.equal(snappedHigh.ui.font_weight, 700);
   });
 
   test('enforces enum constraints on profiles and recording options', () => {

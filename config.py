@@ -40,6 +40,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "ui": {
         "box_width_pct": 68,
+        "font_size": 36,
+        "font_weight": 500,
+        "box_opacity": 0.9,
+        "visible_lines": 7,
+        "mic_sensitivity": 15,
+        "mirror_display": False,
+        "font_family": "open-sans",
         "auto_format_on_paste": True,
         "persist_transcript": True,
         "sync_fumble_filter": False,
@@ -60,6 +67,8 @@ VALID_RECORD_MODES = {"video", "audio"}
 VALID_VIDEO_FORMATS = {"mp4", "webm"}
 VALID_AUDIO_FORMATS = {"mp3", "wav"}
 VALID_DIFFICULT_STYLES = {"pill", "glow", "underline"}
+VALID_FONTS = {"atkinson", "inter", "lexend", "noto-sans", "open-sans", "source-sans-3"}
+VALID_FONT_WEIGHTS = {400, 500, 600, 700}
 
 
 def get_default_config() -> Dict[str, Any]:
@@ -155,6 +164,49 @@ def validate_and_sanitize(raw: Any) -> Dict[str, Any]:
                 result["ui"]["box_width_pct"] = max(30, min(100, int(bw)))
             except (ValueError, TypeError):
                 pass
+        fs = ui.get("font_size")
+        if fs is not None:
+            try:
+                result["ui"]["font_size"] = max(16, min(36, int(fs)))
+            except (ValueError, TypeError):
+                pass
+        fw = ui.get("font_weight")
+        if fw is not None:
+            try:
+                fw_int = int(fw)
+                if fw_int in VALID_FONT_WEIGHTS:
+                    result["ui"]["font_weight"] = fw_int
+                else:
+                    result["ui"]["font_weight"] = min(VALID_FONT_WEIGHTS, key=lambda w: abs(w - fw_int))
+            except (ValueError, TypeError):
+                pass
+        bo = ui.get("box_opacity")
+        if bo is not None:
+            try:
+                result["ui"]["box_opacity"] = round(max(0.2, min(1.0, float(bo))), 2)
+            except (ValueError, TypeError):
+                pass
+        vl = ui.get("visible_lines")
+        if vl is not None:
+            try:
+                result["ui"]["visible_lines"] = max(2, min(12, int(vl)))
+            except (ValueError, TypeError):
+                pass
+        ms = ui.get("mic_sensitivity")
+        if ms is not None:
+            try:
+                result["ui"]["mic_sensitivity"] = max(5, min(30, int(ms)))
+            except (ValueError, TypeError):
+                pass
+        if "mirror_display" in ui:
+            result["ui"]["mirror_display"] = bool(ui["mirror_display"])
+        ff = ui.get("font_family")
+        if isinstance(ff, str):
+            cleaned_ff = ff.strip().lower()
+            if cleaned_ff in VALID_FONTS:
+                result["ui"]["font_family"] = cleaned_ff
+            else:
+                result["ui"]["font_family"] = "open-sans"
         for bkey in ("auto_format_on_paste", "persist_transcript", "sync_fumble_filter"):
             if bkey in ui:
                 result["ui"][bkey] = bool(ui[bkey])

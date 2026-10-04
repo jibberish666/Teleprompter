@@ -7,13 +7,14 @@ const assert = require('node:assert/strict');
 const ViewportModule = require('./static/viewport.js');
 
 describe('TeleprompterViewport - Typography & Geometry Calculations', () => {
-  test('calculates responsive line height with 36px minimum clamp', () => {
-    assert.equal(ViewportModule.getLineHeightForFontSize(25), 45); // 25 * 1.8 = 45
-    assert.equal(ViewportModule.getLineHeightForFontSize(30), 54); // 30 * 1.8 = 54
-    assert.equal(ViewportModule.getLineHeightForFontSize(40), 72); // 40 * 1.8 = 72
-    assert.equal(ViewportModule.getLineHeightForFontSize(15), 36); // 15 * 1.8 = 27 -> clamped to 36
-    assert.equal(ViewportModule.getLineHeightForFontSize(0), 36);  // clamped to 36
-    assert.equal(ViewportModule.getLineHeightForFontSize(null), 45); // fallback 25 -> 45
+  test('calculates responsive line height with 28px minimum clamp', () => {
+    assert.equal(ViewportModule.getLineHeightForFontSize(25), 35); // 25 * 1.4 = 35
+    assert.equal(ViewportModule.getLineHeightForFontSize(30), 42); // 30 * 1.4 = 42
+    assert.equal(ViewportModule.getLineHeightForFontSize(36), 50); // 36 * 1.4 = 50.4 -> 50
+    assert.equal(ViewportModule.getLineHeightForFontSize(40), 56); // 40 * 1.4 = 56
+    assert.equal(ViewportModule.getLineHeightForFontSize(15), 28); // 15 * 1.4 = 21 -> clamped to 28
+    assert.equal(ViewportModule.getLineHeightForFontSize(0), 28);  // clamped to 28
+    assert.equal(ViewportModule.getLineHeightForFontSize(null), 50); // fallback 36 -> 50
   });
 
   test('calculates negative translateY scroll offset', () => {
@@ -79,19 +80,61 @@ describe('TeleprompterViewport - PrompterViewport Engine', () => {
   test('calculates initial geometry and font sizes', () => {
     const vp = new ViewportModule.PrompterViewport({ initialFontSize: 20 });
     assert.equal(vp.fontSize, 20);
-    assert.equal(vp.lineHeight, 36); // 20 * 1.8 = 36
+    assert.equal(vp.lineHeight, 28); // 20 * 1.4 = 28
 
     const newLh = vp.setFontSize(30);
     assert.equal(vp.fontSize, 30);
-    assert.equal(newLh, 54);
-    assert.equal(vp.lineHeight, 54);
+    assert.equal(newLh, 42);
+    assert.equal(vp.lineHeight, 42);
+  });
+
+  function createMockContainer(initialClasses = []) {
+    const classes = new Set(initialClasses);
+    return {
+      style: {},
+      classList: {
+        add(c) { classes.add(c); },
+        remove(c) { classes.delete(c); },
+        contains(c) { return classes.has(c); },
+        [Symbol.iterator]() { return classes.values(); }
+      }
+    };
+  }
+
+  test('setFontFamily updates font class and property', () => {
+    const mockContainer = createMockContainer();
+    const vp = new ViewportModule.PrompterViewport({
+      linesContainer: mockContainer,
+      initialFontFamily: 'open-sans'
+    });
+    assert.equal(vp.fontFamily, 'open-sans');
+    assert.ok(mockContainer.classList.contains('font-teleprompter-open-sans'));
+
+    vp.setFontFamily('lexend');
+    assert.equal(vp.fontFamily, 'lexend');
+    assert.ok(mockContainer.classList.contains('font-teleprompter-lexend'));
+    assert.ok(!mockContainer.classList.contains('font-teleprompter-open-sans'));
+  });
+
+  test('setFontWeight updates font weight style property', () => {
+    const mockContainer = createMockContainer();
+    const vp = new ViewportModule.PrompterViewport({
+      linesContainer: mockContainer,
+      initialFontWeight: 500
+    });
+    assert.equal(vp.fontWeight, 500);
+    assert.equal(mockContainer.style.fontWeight, '500');
+
+    vp.setFontWeight(700);
+    assert.equal(vp.fontWeight, 700);
+    assert.equal(mockContainer.style.fontWeight, '700');
   });
 
   test('scrollToLine updates currentLineIndex and returns translateY', () => {
-    const vp = new ViewportModule.PrompterViewport({ initialFontSize: 25 }); // lh = 45
+    const vp = new ViewportModule.PrompterViewport({ initialFontSize: 36 }); // lh = 50
     const ty = vp.scrollToLine(3);
     assert.equal(vp.currentLineIndex, 3);
-    assert.equal(ty, -135);
+    assert.equal(ty, -150);
   });
 
   test('highlightWord tracks active word object and line index', () => {

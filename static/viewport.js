@@ -21,12 +21,12 @@
   'use strict';
 
   /**
-   * Calculates responsive line height based on typography font size.
-   * Ensures a minimum line height of 36px.
+   * Calculates responsive line height based on typography font size (~1.4 ratio).
+   * Ensures a minimum line height of 28px.
    */
   function getLineHeightForFontSize(fontSize) {
-    const size = (fontSize !== undefined && fontSize !== null && !isNaN(Number(fontSize))) ? Number(fontSize) : 25;
-    return Math.max(36, Math.round(size * 1.8));
+    const size = (fontSize !== undefined && fontSize !== null && !isNaN(Number(fontSize))) ? Number(fontSize) : 36;
+    return Math.max(28, Math.round(size * 1.4));
   }
 
   /**
@@ -92,17 +92,53 @@
       this.cursorBar = options.cursorBar || null;
 
       this.activeLineOffset = options.activeLineOffset !== undefined ? options.activeLineOffset : 1;
-      this.fontSize = options.initialFontSize || 25;
+      this.fontSize = options.initialFontSize || 36;
       this.lineHeight = getLineHeightForFontSize(this.fontSize);
       this.currentLineIndex = 0;
       this.currentWordIndex = 0;
+      this.fontFamily = options.initialFontFamily || 'open-sans';
+      if (this.linesContainer && this.fontFamily) {
+        this.setFontFamily(this.fontFamily);
+      }
+      this.fontWeight = options.initialFontWeight || 500;
+      if (this.linesContainer && this.fontWeight) {
+        this.setFontWeight(this.fontWeight);
+      }
+    }
+
+    /**
+     * Updates font family for rendered prompter lines.
+     */
+    setFontFamily(fontId) {
+      this.fontFamily = fontId || 'open-sans';
+      if (this.linesContainer && this.linesContainer.classList) {
+        for (const cls of Array.from(this.linesContainer.classList)) {
+          if (cls.startsWith('font-teleprompter-')) {
+            this.linesContainer.classList.remove(cls);
+          }
+        }
+        this.linesContainer.classList.add(`font-teleprompter-${this.fontFamily}`);
+      }
+      return this.fontFamily;
+    }
+
+    /**
+     * Updates font weight for rendered prompter lines.
+     */
+    setFontWeight(weight) {
+      const w = Number(weight) || 500;
+      this.fontWeight = w;
+      if (this.linesContainer && this.linesContainer.style) {
+        this.linesContainer.style.fontWeight = String(w);
+      }
+      return this.fontWeight;
     }
 
     /**
      * Updates font size, recalculates geometry, and repositions scroll offset.
      */
     setFontSize(fontSize, numLines = 3) {
-      this.fontSize = Number(fontSize) || 25;
+      this.fontSize = Number(fontSize) || 36;
       this.lineHeight = getLineHeightForFontSize(this.fontSize);
 
       if (this.linesContainer) {

@@ -62,25 +62,22 @@
   transition: opacity 0.2s ease, color 0.2s ease;
 }
 
-/* Upcoming Preview Lines: line-height 1.7, opacity 0.55 */
+/* Upcoming Preview Lines: 78% opacity for comfortable read-ahead without distraction */
 .prompter-line.line-upcoming {
-  opacity: 0.55 !important;
-  line-height: 1.7 !important;
+  opacity: 0.78 !important;
   color: #e5e7eb;
 }
 
-/* Active Highlighted Line: full opacity, high contrast */
+/* Active Highlighted Line: full emphasis, natural reading weight with cursor bar distinction */
 .prompter-line.line-active {
   opacity: 1 !important;
-  line-height: 1.7 !important;
   color: #ffffff !important;
-  font-weight: 700;
+  font-weight: inherit;
 }
 
 /* Past Lines: subtle dimming */
 .prompter-line.line-past {
   opacity: 0.35 !important;
-  line-height: 1.7 !important;
   color: #9ca3af;
 }
 
@@ -432,4 +429,49 @@
 .export-take-master {
   background: rgba(49, 46, 129, 0.2);
   border-color: rgba(99, 102, 241, 0.4);
+}
+
+/* ==========================================================================
+   Teleprompter Typeface Families
+   ========================================================================== */
+
+.font-teleprompter-open-sans {
+  font-family: 'Open Sans', Arial, sans-serif !important;
+}
+
+.font-teleprompter-inter {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+}
+
+.font-teleprompter-source-sans-3 {
+  font-family: 'Source Sans 3', 'Source Sans Pro', Arial, sans-serif !important;
+}
+
+.font-teleprompter-atkinson {
+  font-family: 'Atkinson Hyperlegible', Arial, sans-serif !important;
+}
+
+.font-teleprompter-lexend {
+  font-family: 'Lexend', Arial, sans-serif !important;
+}
+
+.font-teleprompter-noto-sans {
+  font-family: 'Noto Sans', Arial, sans-serif !important;
+}
+
+.typeface-card {
+  transition: all 0.15s ease-in-out;
+  cursor: pointer;
+}
+
+.typeface-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(99, 102, 241, 0.5);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.typeface-card.active {
+  border-color: rgb(99, 102, 241);
+  background-color: rgba(99, 102, 241, 0.08);
+  box-shadow: 0 0 0 1px rgb(99, 102, 241), 0 4px 14px rgba(79, 70, 229, 0.25);
 }

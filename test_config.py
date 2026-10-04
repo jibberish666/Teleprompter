@@ -29,6 +29,44 @@ class TestConfigValidation(unittest.TestCase):
         cfg = config.validate_and_sanitize(raw)
         self.assertEqual(cfg["ui"]["box_width_pct"], 100)
 
+        # Font size clamped between 16 and 36
+        cfg_small_font = config.validate_and_sanitize({"ui": {"font_size": 10}})
+        self.assertEqual(cfg_small_font["ui"]["font_size"], 16)
+        cfg_large_font = config.validate_and_sanitize({"ui": {"font_size": 50}})
+        self.assertEqual(cfg_large_font["ui"]["font_size"], 36)
+
+        # Opacity clamped between 0.2 and 1.0
+        cfg_low_op = config.validate_and_sanitize({"ui": {"box_opacity": 0.05}})
+        self.assertEqual(cfg_low_op["ui"]["box_opacity"], 0.2)
+        cfg_high_op = config.validate_and_sanitize({"ui": {"box_opacity": 1.5}})
+        self.assertEqual(cfg_high_op["ui"]["box_opacity"], 1.0)
+
+        # Visible lines clamped between 2 and 12
+        cfg_lines = config.validate_and_sanitize({"ui": {"visible_lines": 20}})
+        self.assertEqual(cfg_lines["ui"]["visible_lines"], 12)
+
+        # Mic sensitivity clamped between 5 and 30
+        cfg_sens = config.validate_and_sanitize({"ui": {"mic_sensitivity": 100}})
+        self.assertEqual(cfg_sens["ui"]["mic_sensitivity"], 30)
+
+        # Mirror display boolean
+        cfg_mirror = config.validate_and_sanitize({"ui": {"mirror_display": True}})
+        self.assertTrue(cfg_mirror["ui"]["mirror_display"])
+
+        # Font family validation
+        cfg_font = config.validate_and_sanitize({"ui": {"font_family": "atkinson"}})
+        self.assertEqual(cfg_font["ui"]["font_family"], "atkinson")
+        cfg_invalid_font = config.validate_and_sanitize({"ui": {"font_family": "comic-sans"}})
+        self.assertEqual(cfg_invalid_font["ui"]["font_family"], "open-sans")
+        cfg_legacy_font = config.validate_and_sanitize({"ui": {"font_family": "montserrat"}})
+        self.assertEqual(cfg_legacy_font["ui"]["font_family"], "open-sans")
+
+        # Font weight validation & snapping
+        cfg_weight = config.validate_and_sanitize({"ui": {"font_weight": 700}})
+        self.assertEqual(cfg_weight["ui"]["font_weight"], 700)
+        cfg_snap_weight = config.validate_and_sanitize({"ui": {"font_weight": 550}})
+        self.assertIn(cfg_snap_weight["ui"]["font_weight"], [500, 600])
+
     def test_sanitize_profile_validation(self):
         raw = {"engine": {"profile": "invalid_mode"}}
         cfg = config.validate_and_sanitize(raw)

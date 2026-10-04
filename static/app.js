@@ -285,6 +285,12 @@
   const optMirror = document.getElementById('opt-mirror');
   const optLines = document.getElementById('opt-lines');
   const valLines = document.getElementById('val-lines');
+  const btnOpenTypeface = document.getElementById('btn-open-typeface');
+  const displayFontName = document.getElementById('display-font-name');
+  const valFontWeight = document.getElementById('val-fontweight');
+  const modalTypeface = document.getElementById('modal-typeface');
+  const btnCloseTypeface = document.getElementById('btn-close-typeface');
+  const btnDoneTypeface = document.getElementById('btn-done-typeface');
   const viewingWindow = document.getElementById('viewing-window');
   const cursorBar = document.getElementById('cursor-bar');
   const optRecordMode = document.getElementById('opt-record-mode');
@@ -297,6 +303,22 @@
   const optAudioSource = document.getElementById('opt-audio-source');
   const audioSourceBadge = document.getElementById('audio-source-badge');
   const audioSourceDesc = document.getElementById('audio-source-desc');
+
+  const FONT_DISPLAY_NAMES = {
+    'open-sans': 'Open Sans',
+    inter: 'Inter',
+    'source-sans-3': 'Source Sans 3',
+    atkinson: 'Atkinson Hyperlegible',
+    lexend: 'Lexend',
+    'noto-sans': 'Noto Sans'
+  };
+
+  const FONT_WEIGHT_LABELS = {
+    400: 'Regular',
+    500: 'Medium',
+    600: 'Semi-Bold',
+    700: 'Bold'
+  };
 
   const ENGINE_DESCRIPTIONS = {
     ultrafast: '0.4s interval, tiny.en model (lowest latency, snappiest)',
@@ -869,17 +891,24 @@
     videoElem.style.transform = `scale(${zoom})`;
   });
   optOpacity.addEventListener('input', (e) => {
-    prompterBox.style.backgroundColor = `rgba(17, 24, 39, ${e.target.value})`;
-    document.getElementById('val-opacity').textContent = `${Math.round(e.target.value * 100)}%`;
+    const val = parseFloat(e.target.value);
+    prompterBox.style.backgroundColor = `rgba(17, 24, 39, ${val})`;
+    const valOpacity = document.getElementById('val-opacity');
+    if (valOpacity) valOpacity.textContent = `${Math.round(val * 100)}%`;
+    if (configStore) configStore.set('ui.box_opacity', val);
   });
 
   // ---- PrompterViewport Display Engine (static/viewport.js) ----------------
+  const initialFontFamily = configStore ? (configStore.get('ui.font_family') || 'open-sans') : 'open-sans';
+  const initialFontWeight = configStore ? (configStore.get('ui.font_weight') || 500) : 500;
   const viewport = new TeleprompterViewport.PrompterViewport({
     linesContainer: linesContainer,
     scrollingContent: scrollingContent,
     viewingWindow: viewingWindow,
     cursorBar: cursorBar,
-    initialFontSize: optFontsize ? parseInt(optFontsize.value, 10) || 25 : 25,
+    initialFontSize: optFontsize ? parseInt(optFontsize.value, 10) || 36 : 36,
+    initialFontFamily: initialFontFamily,
+    initialFontWeight: initialFontWeight,
     activeLineOffset: 1,
   });
 
@@ -891,8 +920,10 @@
 
   optFontsize.addEventListener('input', (e) => {
     const newSize = parseInt(e.target.value, 10);
-    document.getElementById('val-fontsize').textContent = `${newSize}px`;
+    const valEl = document.getElementById('val-fontsize');
+    if (valEl) valEl.textContent = `${newSize}px`;
     currentLineHeight = viewport.setFontSize(newSize, parseInt(optLines.value, 10));
+    if (configStore) configStore.set('ui.font_size', newSize);
   });
 
   if (optBoxWidth) {
@@ -908,25 +939,150 @@
 
   optMirror.addEventListener('change', (e) => {
     prompterBox.classList.toggle('mirrored', e.target.checked);
+    if (configStore) configStore.set('ui.mirror_display', e.target.checked);
   });
 
-  optSens.addEventListener('input', (e) => {
-    const val = parseInt(e.target.value, 10);
+  function updateSensLabel(val) {
     let label = 'Medium';
     if (val < 10) label = 'High (Quiet Voice)';
     else if (val > 20) label = 'Low (Loud Mic)';
-    document.getElementById('val-sens').textContent = label;
+    const el = document.getElementById('val-sens');
+    if (el) el.textContent = label;
+  }
+
+  optSens.addEventListener('input', (e) => {
+    const val = parseInt(e.target.value, 10);
+    updateSensLabel(val);
+    if (configStore) configStore.set('ui.mic_sensitivity', val);
   });
 
   optLines.addEventListener('input', (e) => {
     const numLines = parseInt(e.target.value, 10);
     valLines.textContent = numLines;
     viewport.updateViewportLines(numLines);
+    if (configStore) configStore.set('ui.visible_lines', numLines);
   });
 
   function updateViewportLines(numLines) {
     viewport.updateViewportLines(numLines);
   }
+
+  // ---- Typeface Modal Controller -------------------------------------------
+  function getSampleScriptText() {
+    const raw = transcriptInput ? transcriptInput.value : '';
+    if (raw && raw.trim()) {
+      const clean = raw
+        .split('\n')
+        .map(l => l.replace(/^#+\s*/, '').trim())
+        .filter(Boolean)
+        .join(' ');
+      const words = clean.split(/\s+/).slice(0, 18).join(' ');
+      if (words) return words + (clean.split(/\s+/).length > 18 ? '…' : '');
+    }
+    return 'Introducing the Turbo Technics VSR400 EVO, the next evolution in high-speed core balancing for passenger cars.';
+  }
+
+  function updateTypefaceCardsSelection(activeFontId) {
+    if (!modalTypeface) return;
+    const cards = modalTypeface.querySelectorAll('.typeface-card');
+    cards.forEach(card => {
+      const cardFont = card.getAttribute('data-font-id');
+      const isActive = cardFont === activeFontId;
+      card.classList.toggle('active', isActive);
+      const check = card.querySelector('.typeface-check');
+      if (check) check.classList.toggle('hidden', !isActive);
+    });
+  }
+
+  function selectTypeface(fontId) {
+    if (!fontId) return;
+    viewport.setFontFamily(fontId);
+    if (displayFontName) {
+      displayFontName.textContent = FONT_DISPLAY_NAMES[fontId] || fontId;
+    }
+    updateTypefaceCardsSelection(fontId);
+    if (configStore) {
+      configStore.set('ui.font_family', fontId);
+    }
+  }
+
+  function openTypefaceModal() {
+    if (!modalTypeface) return;
+    const activeFont = configStore ? (configStore.get('ui.font_family') || 'open-sans') : 'open-sans';
+    const activeWeight = configStore ? (configStore.get('ui.font_weight') || 500) : 500;
+    const sampleText = getSampleScriptText();
+
+    const sampleElements = modalTypeface.querySelectorAll('.typeface-sample');
+    sampleElements.forEach(el => {
+      el.textContent = sampleText;
+      el.style.fontWeight = String(activeWeight);
+    });
+
+    updateTypefaceCardsSelection(activeFont);
+    modalTypeface.classList.remove('hidden');
+  }
+
+  function closeTypefaceModal() {
+    if (!modalTypeface) return;
+    modalTypeface.classList.add('hidden');
+  }
+
+  // ---- Font Weight Segmented Buttons Controller ----------------------------
+  function updateFontWeightUI(weight) {
+    const w = Number(weight) || 500;
+    if (valFontWeight) {
+      valFontWeight.textContent = FONT_WEIGHT_LABELS[w] || `${w}`;
+    }
+    const buttons = document.querySelectorAll('.btn-fontweight');
+    buttons.forEach(btn => {
+      const btnW = parseInt(btn.getAttribute('data-weight'), 10);
+      const isActive = btnW === w;
+      if (isActive) {
+        btn.className = 'btn-fontweight py-1 px-1 rounded text-[11px] font-semibold transition bg-indigo-600 text-white shadow-sm cursor-pointer text-center';
+      } else {
+        btn.className = 'btn-fontweight py-1 px-1 rounded text-[11px] font-normal transition text-gray-400 hover:text-white hover:bg-gray-800/80 cursor-pointer text-center';
+      }
+    });
+  }
+
+  document.querySelectorAll('.btn-fontweight').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const w = parseInt(btn.getAttribute('data-weight'), 10);
+      viewport.setFontWeight(w);
+      updateFontWeightUI(w);
+      if (configStore) {
+        configStore.set('ui.font_weight', w);
+      }
+    });
+  });
+
+  if (btnOpenTypeface) {
+    btnOpenTypeface.addEventListener('click', openTypefaceModal);
+  }
+  if (btnCloseTypeface) {
+    btnCloseTypeface.addEventListener('click', closeTypefaceModal);
+  }
+  if (btnDoneTypeface) {
+    btnDoneTypeface.addEventListener('click', closeTypefaceModal);
+  }
+  if (modalTypeface) {
+    modalTypeface.addEventListener('click', (e) => {
+      if (e.target === modalTypeface) closeTypefaceModal();
+    });
+    const cards = modalTypeface.querySelectorAll('.typeface-card');
+    cards.forEach(card => {
+      card.addEventListener('click', () => {
+        const fontId = card.getAttribute('data-font-id');
+        selectTypeface(fontId);
+      });
+    });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modalTypeface && !modalTypeface.classList.contains('hidden')) {
+      closeTypefaceModal();
+    }
+  });
 
   // ---- Automatic Teleprompter Script Phrasing & Formatting -----------------
   function formatScriptForPrompter(text) {
@@ -1653,20 +1809,73 @@
     document.getElementById('side-panel').classList.toggle('hidden');
   });
 
+  // ---- Display Settings Persistence & Reconcile Helper ---------------------
+  function applyDisplaySettingsFromConfig() {
+    if (!configStore) return;
+
+    // 1. Font Size & Visible Lines
+    const fontSize = configStore.get('ui.font_size') || 36;
+    const lines = configStore.get('ui.visible_lines') || 7;
+    if (optFontsize) optFontsize.value = fontSize;
+    const valFontsize = document.getElementById('val-fontsize');
+    if (valFontsize) valFontsize.textContent = `${fontSize}px`;
+    if (optLines) optLines.value = lines;
+    if (valLines) valLines.textContent = lines;
+    currentLineHeight = viewport.setFontSize(fontSize, lines);
+
+    // 2. Box Width
+    const boxWidth = configStore.get('ui.box_width_pct') || 68;
+    if (optBoxWidth) optBoxWidth.value = boxWidth;
+    if (valBoxWidth) valBoxWidth.textContent = `${boxWidth}%`;
+    prompterBox.style.width = `${boxWidth}%`;
+    prompterBox.style.maxWidth = `${boxWidth}%`;
+
+    // 3. Box Opacity
+    const opacity = configStore.get('ui.box_opacity') !== undefined ? configStore.get('ui.box_opacity') : 0.9;
+    if (optOpacity) optOpacity.value = opacity;
+    const valOpacity = document.getElementById('val-opacity');
+    if (valOpacity) valOpacity.textContent = `${Math.round(opacity * 100)}%`;
+    prompterBox.style.backgroundColor = `rgba(17, 24, 39, ${opacity})`;
+
+    // 4. Mic Sensitivity
+    const sens = configStore.get('ui.mic_sensitivity') || 15;
+    if (optSens) optSens.value = sens;
+    updateSensLabel(sens);
+
+    // 5. Mirror Display
+    const mirror = Boolean(configStore.get('ui.mirror_display'));
+    if (optMirror) optMirror.checked = mirror;
+    prompterBox.classList.toggle('mirrored', mirror);
+
+    // 6. Retake Hotkey
+    const hotkey = configStore.get('ui.retake_hotkey') || 'r';
+    retakeHotkey = hotkey;
+    if (optRetakeHotkey) optRetakeHotkey.value = hotkey.toUpperCase();
+
+    // 7. Typeface
+    const fontId = configStore.get('ui.font_family') || 'open-sans';
+    viewport.setFontFamily(fontId);
+    if (displayFontName) {
+      displayFontName.textContent = FONT_DISPLAY_NAMES[fontId] || fontId;
+    }
+
+    // 8. Font Weight
+    const fontWeight = configStore.get('ui.font_weight') || 500;
+    viewport.setFontWeight(fontWeight);
+    updateFontWeightUI(fontWeight);
+  }
+
+  if (configStore) {
+    configStore.subscribe((evt) => {
+      if (evt && (evt.domain === 'ui' || evt.domain === '*')) {
+        applyDisplaySettingsFromConfig();
+      }
+    });
+  }
+
   // ---- Boot ------------------------------------------------------------------
   try {
-    if (optFontsize) {
-      const initialFontSize = parseInt(optFontsize.value, 10) || 25;
-      currentLineHeight = viewport.setFontSize(initialFontSize, parseInt(optLines.value, 10));
-    }
-    if (optBoxWidth) {
-      const savedBoxWidth = configStore ? configStore.get('ui.box_width_pct') : localStorage.getItem('teleprompter_box_width_pct');
-      const widthToApply = savedBoxWidth ? parseInt(savedBoxWidth, 10) : 68;
-      optBoxWidth.value = widthToApply;
-      prompterBox.style.width = `${widthToApply}%`;
-      prompterBox.style.maxWidth = `${widthToApply}%`;
-      if (valBoxWidth) valBoxWidth.textContent = `${widthToApply}%`;
-    }
+    applyDisplaySettingsFromConfig();
     if (persistTranscript) {
       const savedTranscript = (configStore && configStore.get('script.saved_transcript'))
         || (typeof localStorage !== 'undefined' ? localStorage.getItem('teleprompter_saved_transcript') : '')
@@ -1681,7 +1890,6 @@
     updateClearButtonVisibility();
     parseAndRenderTranscript();
     initCameraAndAudio();
-    updateViewportLines(parseInt(optLines.value, 10));
     connect();
   } catch (err) {
     console.error('[Teleprompter] Error during boot sequence:', err);
