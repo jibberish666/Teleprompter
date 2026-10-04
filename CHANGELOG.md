@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.6.0] - 2026-10-04
+
+### 🔤 Comprehensive Typography & Typeface Engine (`static/viewport.js`, `static/index.html`, `static/fonts/`)
+- **Typeface Picker Modal**: Added a dedicated dialog with interactive selection cards for 6 curated, ultra-legible reading typefaces: **Open Sans** (Natural Reading), **Inter** (Clean & Modern), **Source Sans 3** (Comfortable & Neutral), **Atkinson Hyperlegible** (High Legibility), **Lexend** (Reading Fluency), and **Noto Sans** (International).
+- **Live Script Previews**: Each typeface card dynamically renders a sample using the user's active script, allowing immediate visual comparison before switching.
+- **Granular Font Weight Selection**: Added quick-toggle buttons for **Regular (400)**, **Medium (500)**, and **Bold (700)** font weights with active button states and instantaneous prompter restyling.
+- **Proportional Line Spacing Presets**: Introduced **Tight (1.20×)**, **Comfortable (1.35×)**, and **Relaxed (1.50×)** line-spacing modes with dynamic height calculation (`getLineHeightForFontSize`), preventing line overlap or excessive vertical separation across all font sizes (16px–36px).
+- **Smooth Geometry & Dynamic Re-Centering**: Real-time layout geometry recomputes line heights, margins, and negative scroll offsets seamlessly, maintaining the active reading position without visual jumps.
+- **100% Offline Font Assets (`static/fonts/`)**: Locally bundled WOFF2 font files and `fonts.css`—zero external Google Fonts CDN or network requests, preserving offline privacy and instant startup.
+
+### ⚙️ Unified Reactive Configuration System (`static/config.js`, `config.py`)
+- **Observable Client Store (`static/config.js`)**: Centralized configuration management with canonical schema partitioning (`server`, `engine`, `audio`, `recording`, `ui`, `script`), deep cloning, bounds validation, and domain-level subscription hooks (`subscribe(domain, callback)`) for instant UI reactivity.
+- **Transparent Schema Migration**: Automatically detects and migrates legacy flat browser `localStorage` keys (`teleprompter_*`) into structured JSON configuration without loss of user preferences.
+- **Atomic Backend Persistence (`config.py`)**: Structured server configuration persistence to `teleprompter.json` with thread-safe atomic temp-file-to-rename writes.
+- **Real-Time Bi-Directional Sync**: WebSocket delta patch protocol synchronizes configuration updates between browser clients and the backend server.
+
+### 🧪 Expanded Test Suite
+- Automated test coverage expanded to **150 frontend Node.js tests** across 42 suites and **90 backend Python unit tests** (**240 total passing tests**).
+
 ## [v1.5.1] - 2026-10-04
 
 ### 🎙️ Spliced Master Take Audio De-Overlapping (`static/media.js`)

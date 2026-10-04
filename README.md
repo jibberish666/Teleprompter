@@ -7,15 +7,15 @@ A 100% local, speech-synchronized AI teleprompter. It captures your microphone, 
 
 Everything runs on your local machine—no cloud APIs, no accounts, and no speech/data sent anywhere.
 
-## 📢 What's New in v1.5.1
+## 📢 What's New in v1.6.0
 
-- **Seamless Spliced Master Audio (De-Overlapping)**: Resolved section boundary stutter and echo artifacts (such as repeated word fragments like "Evo-o"). The master track assembly (`processAudioTakes`) intelligently de-overlaps adjacent padded segments so continuous master recordings (`everything.wav`, `everything.mp3`) play smoothly without audio repeats, while discrete section takes retain safety padding (±0.25s) to guarantee no words are clipped.
-- **Interactive Master End Trimming**: Added a dedicated **Trim Master End** modal to the export dialog. Adjust audio cutoff from 0.0s to 1.0s in 0.1s increments with real-time auditioning (`▶ Play from last 3 seconds`), auto-replay on release, and persistent preferences.
-- **Multi-Epoch Retake Boundary Refinement**: Upgraded two-pass Whisper boundary post-processing (`refine.py`) to partition audio into temporal epochs bounded by `retakeSec`. Words spoken during aborted takes are completely isolated and excluded from matching.
-- **Section-Based Audio Recording & Precision Take Slicing**: Divide scripts with markdown section tags (e.g. `[1]`, `[2]`, `[3]` or `[Intro]`, `[Body]`, `[Outro]`) to automatically track boundaries and slice discrete audio takes alongside a full master read.
-- **Multi-File Export & Browser PKZIP Archive**: Save sliced takes directly to disk via the **File System Access API** without download prompts, or bundle all takes into a timestamped `.zip` archive generated right inside your browser.
-- **CMX 3600 EDL Export**: Generates industry-standard Edit Decision Lists (EDLs) with SMPTE timecode calculations for professional multi-track NLE timelines (DaVinci Resolve, Premiere Pro).
-- **Expanded Test Suite**: Full test suite expanded to **144 frontend Node.js tests** and **90 backend Python unit tests** (234 total passing tests).
+- **🔤 Comprehensive Typography & Typeface Engine**: Open the new **Typeface Picker** dialog from the Display panel to choose from 6 curated, ultra-legible reading typefaces (**Open Sans**, **Inter**, **Source Sans 3**, **Atkinson Hyperlegible**, **Lexend**, and **Noto Sans**). Every font card renders live previews using your active script so you can compare readability in real time.
+- **Dynamic Font Weights & Proportional Line Spacing**: Fast one-click toggles for **Regular (400)**, **Medium (500)**, and **Bold (700)** font weights, paired with **Tight (1.20×)**, **Comfortable (1.35×)**, and **Relaxed (1.50×)** proportional line-spacing presets. Dynamic line-height geometry recalculates instantly to ensure comfortable reading without line overlap across all font sizes (16px–36px).
+- **100% Offline Font Assets**: All typefaces are bundled locally inside `static/fonts/` with self-hosted WOFF2 files and `fonts.css`—zero external CDN requests or telemetry, ensuring 100% offline privacy and zero-latency loading.
+- **⚙️ Unified Reactive Configuration System (`static/config.js`, `config.py`)**: Centralized observable configuration engine featuring canonical schema partitioning, bounds validation, and instant UI subscription hooks. Automatically migrates legacy browser `localStorage` keys to structured JSON and synchronizes updates with `teleprompter.json` via thread-safe atomic backend persistence and WebSocket delta patches.
+- **🎙️ Spliced Master Take De-Overlapping & Trimming**: Spliced master tracks (`everything.wav`, `everything.mp3`) de-overlap adjacent padded segments to eliminate boundary stutter and syllable echoes, with a dedicated **Trim Master End** modal (0.0s–1.0s) for trimming trailing audio before export.
+- **Multi-Epoch Retake Boundary Refinement**: Two-pass Whisper boundary post-processing (`refine.py`) partitions audio into temporal epochs bounded by `retakeSec`, cleanly isolating discarded takes from section cuts.
+- **🧪 Expanded Test Suite**: Automated test suite expanded to **150 frontend Node.js tests** across 42 suites and **90 backend Python unit tests** (**240 total passing tests**).
 - See full notes in [CHANGELOG.md](file:///Users/philkershaw/Documents/work/Tools/teleprompter/CHANGELOG.md) or the [Releases Page](https://github.com/jibberish666/Teleprompter/releases).
 
 ---
@@ -84,12 +84,33 @@ python server.py
    - Any stumbled, skipped, or repeated words are caught automatically and highlighted directly on your script as visual cues.
 6. **Customize Cues & Difficult Words**:
    - Open **Script & Options** $\rightarrow$ **Difficult Words & Colors…** to review detected fumbles, filter by tag (*Skipped*, *Stumbled*, *Repeated*), and customize highlight styling (*Filled Pill*, *Text Glow*, or *Underline Accent*).
-7. **Record Live Take & Automatic Slicing**:
+7. **Personalize Typography & Display**:
+   - Click the font name in the **Display** panel to open the **Typeface Picker** and preview 6 high-legibility typefaces with your live script.
+   - Adjust font weight (**Regular**, **Medium**, **Bold**) and line spacing (**Tight**, **Comfortable**, **Relaxed**) to match your reading style.
+8. **Record Live Take & Automatic Slicing**:
    - Organize your text with section tags like `[1]`, `[2]`, `[3]` or `[Intro]`, `[Body]`, `[Outro]`.
    - Click **Start Session** when ready. Speak naturally—the teleprompter scrolls in real-time with your voice.
    - If you stumble during a section, tap **`R`** (or click **Retake**) to restart the current section without stopping the session.
    - Click **Stop & Save** when finished. The system downsamples the audio, optionally refines section boundaries using full-file Whisper word timestamps, and slices individual takes (`1.wav`, `2.wav`) plus a master track (`everything.wav`).
    - Choose to save all takes directly to a selected folder (via File System Access API) or download a bundled `.zip` archive.
+
+---
+
+## 🔤 Comprehensive Typography & Reading Engine
+
+Optimal typography is critical for speech cadence, reduced cognitive load, and effortless reading flow:
+
+- **Typeface Picker Modal**: Click the active typeface in the Display panel to open a clean modal displaying 6 curated, ultra-legible fonts:
+  - **Open Sans**: Natural reading rhythm with balanced proportions.
+  - **Inter**: Clean, modern geometric sans-serif optimized for screens.
+  - **Source Sans 3**: Neutral, comfortable reading designed specifically for user interfaces.
+  - **Atkinson Hyperlegible**: Award-winning design engineered for maximum character distinction and legibility.
+  - **Lexend**: Scientifically designed to improve reading fluency and visual tracking.
+  - **Noto Sans**: Uncompromising clarity and universal character harmony.
+- **Dynamic Script Auditioning**: Each font card renders a live sample of your active script directly inside the dialog, so you see exactly how your words look before selecting.
+- **Granular Weight Selection**: Instantly switch between **Regular (400)**, **Medium (500)**, and **Bold (700)** weights with active button feedback.
+- **Proportional Line Spacing**: Choose from **Tight (1.20×)**, **Comfortable (1.35×)**, or **Relaxed (1.50×)** line spacing presets. The viewport dynamically recalculates line heights and scroll translation offsets with zero text jumping or line overlap.
+- **100% Offline Asset Delivery**: All WOFF2 font files and stylesheets are bundled locally in `static/fonts/`—guaranteeing instant rendering, zero CDN latency, and strict offline privacy.
 
 ---
 
@@ -131,11 +152,14 @@ Rehearsal Mode is designed for zero-pressure practice before hitting record:
 
 - **`R` Key / Retake Button**: Rewind and re-record the current active section during a live recording session.
 - **Rehearse Button**: Start a trial read-through without saving recording files, capturing fumbles in real time.
+- **Typeface Picker Modal**: Click the active font name in the Display panel to preview and switch between 6 curated high-legibility typefaces with live script auditioning.
+- **Font Weight Selector**: Quickly toggle between Regular (400), Medium (500), and Bold (700) weights.
+- **Line Spacing Presets**: Switch between Tight (1.20×), Comfortable (1.35×), and Relaxed (1.50×) line spacing presets with automatic height scaling.
 - **Trim Master End**: Audition and adjust trailing cutoff (0.0s–1.0s) on the spliced master take directly from the export modal.
 - **Edit Script Modal**: Open the fullscreen script editor with live stats (word count, reading duration, section count).
 - **Clear Highlights**: Instantly clear rehearsal fumbles and highlight cues from the text display.
 - **Difficult Words & Colors**: Open the configuration panel to review fumbles, filter categories, and change cue styling.
-- **Prompter Box Width Slider**: Adjust prompter reading width dynamically between 60% and 96% (saved in `localStorage`).
+- **Prompter Box Width Slider**: Adjust prompter reading width dynamically between 55% and 96% (persisted across sessions).
 - **Auto-Format Script**: Click **Auto-Format** in the transcript panel to break paragraphs into 5–8 word rhythmic phrases with breath pauses.
 - **Auto-Format on Paste**: Checkbox toggle to automatically format text on paste or file upload (persisted in preferences).
 - **Restart Script Button**: Rewind instantly back to the first word without modifying or clearing text.
@@ -143,19 +167,19 @@ Rehearsal Mode is designed for zero-pressure practice before hitting record:
 - **Arrow Up / Down**: Manually step the highlight backward or forward (backend aligner syncs automatically).
 - **Speech Preset Dropdown**: Switch latency and models dynamically on the fly (*Ultra Fast*, *Fast*, *Standard*).
 - **Microphone Input Selector**: Open **Script & Options** $\rightarrow$ **Microphone Input** to select between **Browser Microphone** (zero host conflicts) and detected hardware sound devices.
-- **Display Adjustments**: Prompter box width slider (60% to 96%), font size, line spacing, box opacity, visible line count, mirror display (flip horizontal for physical glass rigs), camera overlay toggle & zoom.
+- **Display Adjustments**: Prompter box width slider (55% to 96%), font size (16px–36px), box opacity, visible line count, mirror display (flip horizontal for physical glass rigs), camera overlay toggle & zoom.
 
 ---
 
 ## 🧪 Automated Testing
 
-The project includes automated test suites covering speech alignment, multi-word lookahead confirmation, rehearsal telemetry, section timeline state machines, audio slicing, and export adapters:
+The project includes automated test suites covering speech alignment, multi-word lookahead confirmation, rehearsal telemetry, section timeline state machines, typography geometry, audio slicing, and export adapters:
 
 ```bash
 # Run backend Python tests (90 tests)
 .venv/bin/python -m unittest discover -p "test_*.py"
 
-# Run frontend JavaScript test suite (144 tests)
+# Run frontend JavaScript test suite (150 tests across 42 suites)
 node --test test_*.js
 ```
 ---
@@ -219,8 +243,8 @@ refine.py            # Post-recording section alignment with word-level Whisper 
 aligner.py           # Locality-first fuzzy word aligner with multi-word lookahead
 telemetry.py         # Rehearsal metrics observer (detects skipped, stumbled, repeated words)
 config.py            # Atomic configuration manager and persistence (teleprompter.json)
-test_*.py            # Python backend test suite (89 unit and playback simulation tests)
-test_*.js            # Frontend JavaScript test suite (135 tests)
+test_*.py            # Python backend test suite (90 unit and playback simulation tests)
+test_*.js            # Frontend JavaScript test suite (150 tests across 42 suites)
 static/              # Modular Web UI frontend
 ├── index.html       # Prompter markup, dialog shells, and modals
 ├── app.js           # UI coordinator, WebSocket dispatcher & lifecycle
@@ -233,6 +257,7 @@ static/              # Modular Web UI frontend
 ├── script_editor.js # Script editor modal controller with live stats
 ├── server_control.js# Server restart & shutdown controller
 ├── config.js        # Reactive client-side configuration store
+├── fonts/           # Self-hosted offline WOFF2 fonts and stylesheet
 └── style.css        # Responsive stylesheet
 teleprompter.command # macOS double-clickable launcher
 run.sh               # Shell startup script
